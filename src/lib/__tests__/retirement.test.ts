@@ -9,8 +9,8 @@ import {
 import type { RetirementPlan } from "../types";
 
 const base: RetirementPlan = {
-  realReturnPct: 7,
-  inflationPct: 4.5,
+  nominalReturnPct: 7,
+  inflationPct: 0, // inflação 0 -> nominal = real nos testes
   currentAge: 49,
   retirementAge: 64,
   initialValue: 1_500_000,

@@ -24,12 +24,30 @@ export function monthlyRealRate(annualPct: number): number {
   return Math.pow(1 + annualPct / 100, 1 / 12) - 1;
 }
 
+/** taxa mensal real: nominal anual deflacionada pela inflação anual */
+export function realMonthlyRate(
+  nominalPct: number,
+  inflationPct: number,
+): number {
+  return (
+    (1 + monthlyRealRate(nominalPct)) / (1 + monthlyRealRate(inflationPct)) - 1
+  );
+}
+
+/** taxa anual real equivalente ao plano (nominal deflacionada), em fração */
+export function realAnnualRate(plan: RetirementPlan): number {
+  return (
+    (1 + plan.nominalReturnPct / 100) / (1 + plan.inflationPct / 100) - 1
+  );
+}
+
 /**
  * Simula mês a mês: aportes até `retirementAge`, depois retiradas de
  * `desiredMonthlyIncome`, sempre rendendo a taxa real mensal.
  */
 export function simulateRetirement(plan: RetirementPlan): RetirementResult {
-  const r = monthlyRealRate(plan.realReturnPct);
+  // a simulação roda em termos reais: nominal deflacionada pela inflação
+  const r = realMonthlyRate(plan.nominalReturnPct, plan.inflationPct);
   const accumMonths = Math.max(
     0,
     Math.round((plan.retirementAge - plan.currentAge) * 12),

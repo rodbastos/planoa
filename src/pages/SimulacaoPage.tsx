@@ -26,6 +26,7 @@ import { saveRetirement, saveWealth } from "../lib/firestore";
 import {
   dynamicsFromImports,
   dynamicsFromWealth,
+  realAnnualRate,
   simulateEstimated,
   simulateRetirement,
   yearEndTs,
@@ -42,7 +43,7 @@ import { CHART } from "../lib/colors";
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
 const DEFAULT_PLAN: RetirementPlan = {
-  realReturnPct: 7,
+  nominalReturnPct: 12,
   inflationPct: 4.5,
   currentAge: 49,
   retirementAge: 64,
@@ -116,7 +117,14 @@ export function SimulacaoPage() {
     if (dirty || loadingPlan || loadingImports || loadingWealth) return;
     if (savedPlan) {
       // merge com defaults: planos salvos antes de novos campos
-      setDraft({ ...DEFAULT_PLAN, ...savedPlan });
+      const merged = { ...DEFAULT_PLAN, ...savedPlan };
+      // legado: plano salvo com "realReturnPct" -> converte para nominal
+      const legacy = (savedPlan as { realReturnPct?: number }).realReturnPct;
+      if (savedPlan.nominalReturnPct === undefined && legacy !== undefined) {
+        merged.nominalReturnPct =
+          ((1 + legacy / 100) * (1 + merged.inflationPct / 100) - 1) * 100;
+      }
+      setDraft(merged);
     } else {
       setDraft({
         ...DEFAULT_PLAN,
@@ -275,7 +283,20 @@ export function SimulacaoPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Rentabilidade histórica"
+          value={
+            estimate?.nominalAnnualRate !== undefined
+              ? formatPct(estimate.nominalAnnualRate)
+              : "—"
+          }
+          hint={
+            estimate?.nominalAnnualRate !== undefined
+              ? "a.a. nominal, média do seu histórico"
+              : "envie o CSV anual para estimar"
+          }
+        />
         <StatCard
           label="Patrimônio real acumulado"
           value={formatBRL(result.accumulated)}
@@ -305,7 +326,7 @@ export function SimulacaoPage() {
         <Card>
           <CardHeader
             title="Parâmetros do plano"
-            subtitle="Valores em reais de hoje"
+            subtitle="Rentabilidade nominal convertida a termos reais pela inflação"
             action={
               <Button size="sm" onClick={save} disabled={saving || !dirty}>
                 <Save className="h-4 w-4" /> Salvar
@@ -314,11 +335,11 @@ export function SimulacaoPage() {
           />
           <CardContent className="space-y-3">
             <PlanField
-              label="Rentabilidade real esperada"
+              label="Rentabilidade anual total"
               suffix="% a.a."
               step={0.5}
-              value={draft.realReturnPct}
-              onChange={set("realReturnPct")}
+              value={draft.nominalReturnPct}
+              onChange={set("nominalReturnPct")}
             />
             <PlanField
               label="Inflação esperada"
@@ -526,8 +547,8 @@ export function SimulacaoPage() {
               {result.depletionAge != null
                 ? `os ~${Math.floor(result.depletionAge)} anos`
                 : `os ${Math.round(ultimoPonto?.age ?? draft.retirementAge)} anos`}
-              , com rentabilidade real de{" "}
-              {formatPct(draft.realReturnPct / 100)} a.a.
+              , com rentabilidade de {formatPct(draft.nominalReturnPct / 100)}{" "}
+              a.a. (≈ {formatPct(realAnnualRate(draft))} real)
               {estimate &&
                 ` Pela trajetória observada, o patrimônio ${
                   estimate.depletionAge != null

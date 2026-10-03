@@ -106,9 +106,9 @@ export interface WealthYear {
 }
 
 export interface RetirementPlan {
-  /** rentabilidade real esperada, em % ao ano (ex.: 7) */
-  realReturnPct: number;
-  /** inflação esperada, em % ao ano — deflaciona a trajetória observada (nominal) */
+  /** rentabilidade anual total esperada (nominal), em % ao ano (ex.: 12) */
+  nominalReturnPct: number;
+  /** inflação esperada, em % ao ano — converte tudo a termos reais */
   inflationPct: number;
   currentAge: number;
   /** idade em que começam os resgates */
