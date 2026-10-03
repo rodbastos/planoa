@@ -7,6 +7,8 @@ import {
   Wallet,
 } from "lucide-react";
 import { usePortfolio, useTargets } from "../hooks/usePortfolio";
+import { importDate } from "../hooks/useImports";
+import { ImportSelector } from "../components/ImportSelector";
 import { groupBy, compareWithTargets, totalBalance } from "../lib/allocation";
 import { formatBRL, formatPct, formatTimestamp } from "../lib/format";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
@@ -61,16 +63,18 @@ export function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Posição de{" "}
-            {formatTimestamp(importMeta.referenceDate ?? importMeta.uploadedAt)}{" "}
-            · {importMeta.fileName}
+            Posição de {formatTimestamp(importDate(importMeta))} ·{" "}
+            {importMeta.fileName}
           </p>
         </div>
-        <Link to="/importar">
-          <Button variant="outline" size="sm">
-            <Upload className="h-4 w-4" /> Nova importação
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <ImportSelector className="w-72" />
+          <Link to="/importar">
+            <Button variant="outline" size="sm">
+              <Upload className="h-4 w-4" /> Nova importação
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  estimateDynamics,
-  impliedMonthlyRate,
+  dynamicsFromImports,
+  dynamicsFromWealth,
   monthlyRealRate,
   simulateEstimated,
   simulateRetirement,
@@ -69,84 +69,83 @@ describe("simulateRetirement", () => {
   });
 });
 
-describe("impliedMonthlyRate", () => {
-  it("recupera a taxa usada para gerar o fluxo", () => {
-    const r = monthlyRealRate(7);
-    const fv =
-      1_000_000 * 1.07 + 5_000 * ((Math.pow(1 + r, 12) - 1) / r);
-    expect(impliedMonthlyRate(1_000_000, 5_000, 12, fv)).toBeCloseTo(r, 6);
+describe("dynamicsFromWealth", () => {
+  it("média geométrica da rentabilidade e média dos fluxos", () => {
+    const dyn = dynamicsFromWealth(
+      [
+        { year: 2023, flows: 120_000, returnPct: 0.1 },
+        { year: 2024, flows: 60_000, returnPct: 0.2 },
+      ],
+      2025,
+    );
+    // geo mean de 10% e 20% a.a. ≈ 14,89% a.a.
+    expect(Math.pow(1 + dyn.monthlyRate, 12)).toBeCloseTo(
+      Math.sqrt(1.1 * 1.2),
+      6,
+    );
+    expect(dyn.monthlyContribution).toBeCloseTo(180_000 / 24, 6);
+  });
+
+  it("ignora o ano corrente (parcial)", () => {
+    const dyn = dynamicsFromWealth(
+      [
+        { year: 2024, flows: 120_000, returnPct: 0.1 },
+        { year: 2025, flows: 5_000, returnPct: 0.5 },
+      ],
+      2025,
+    );
+    expect(dyn.monthlyContribution).toBeCloseTo(120_000 / 12, 6);
+    expect(dyn.monthlyRate).toBeCloseTo(monthlyRealRate(10), 4);
   });
 });
 
-describe("estimateDynamics", () => {
+describe("dynamicsFromImports", () => {
   const now = Date.now();
   const ano = 365.25 * 24 * 60 * 60 * 1000;
 
-  it("separa aporte de rentabilidade usando o total investido", () => {
-    const r = monthlyRealRate(7);
-    const fv =
-      1_000_000 * 1.07 + 5_000 * ((Math.pow(1 + r, 12) - 1) / r);
-    const imports = [
-      { date: now - ano, patrimonio: 1_000_000, totalInvestido: 940_000 },
-      { date: now, patrimonio: fv, totalInvestido: 1_000_000 },
-    ];
-    const dyn = estimateDynamics(imports)!;
-    expect(dyn.monthlyContribution).toBeCloseTo(5_000, 6);
-    expect(dyn.monthlyRate).toBeCloseTo(r, 4);
-  });
-
-  it("sem total investido, trata todo o crescimento como rendimento", () => {
+  it("tendência linear do patrimônio (R$/mês, taxa 0)", () => {
     const imports = [
       { date: now - ano, patrimonio: 1_000_000 },
-      { date: now, patrimonio: 1_070_000 },
+      { date: now, patrimonio: 1_120_000 },
     ];
-    const dyn = estimateDynamics(imports)!;
-    expect(dyn.monthlyContribution).toBe(0);
-    expect(dyn.monthlyRate).toBeCloseTo(monthlyRealRate(7), 4);
+    const dyn = dynamicsFromImports(imports)!;
+    expect(dyn.monthlyRate).toBe(0);
+    expect(dyn.monthlyContribution).toBeCloseTo(120_000 / 12, 0);
   });
 
   it("retorna null com menos de duas importações", () => {
-    expect(estimateDynamics([])).toBeNull();
+    expect(dynamicsFromImports([])).toBeNull();
     expect(
-      estimateDynamics([{ date: now, patrimonio: 1_000_000 }]),
+      dynamicsFromImports([{ date: now, patrimonio: 1_000_000 }]),
     ).toBeNull();
   });
 });
 
 describe("simulateEstimated", () => {
   const now = Date.now();
-  const ano = 365.25 * 24 * 60 * 60 * 1000;
-  const r = monthlyRealRate(7);
-  const fv = 1_000_000 * 1.07 + 5_000 * ((Math.pow(1 + r, 12) - 1) / r);
-  const imports = [
-    { date: now - ano, patrimonio: 1_000_000, totalInvestido: 940_000 },
-    { date: now, patrimonio: fv, totalInvestido: 1_000_000 },
-  ];
+  const anchor = { date: now, patrimonio: 1_131_901 };
+  const dyn = { monthlyRate: monthlyRealRate(7), monthlyContribution: 5_000 };
 
-  it("parte do patrimônio da última importação, na idade atual", () => {
-    const est = simulateEstimated(imports, base, now)!;
+  it("parte do ponto âncora, na idade atual", () => {
+    const est = simulateEstimated(anchor, dyn, base, now);
     expect(est.annualRate).toBeCloseTo(0.07, 3);
-    expect(est.monthlyContribution).toBeCloseTo(5_000, 6);
+    expect(est.monthlyContribution).toBe(5_000);
     expect(est.points[0].age).toBeCloseTo(49, 1);
-    expect(est.points[0].patrimonio).toBe(fv);
+    expect(est.points[0].patrimonio).toBe(anchor.patrimonio);
   });
 
   it("desconta a renda desejada após a idade de resgate e esgota", () => {
-    const est = simulateEstimated(imports, base, now)!;
+    const est = simulateEstimated(anchor, dyn, base, now);
     expect(est.depletionAge).not.toBeNull();
     expect(est.depletionAge!).toBeGreaterThan(64);
     expect(est.points[est.points.length - 1].patrimonio).toBe(0);
   });
 
   it("não se esgota com renda menor que os juros da trajetória", () => {
-    const est = simulateEstimated(imports, {
+    const est = simulateEstimated(anchor, dyn, {
       ...base,
       desiredMonthlyIncome: 1_000,
-    })!;
+    });
     expect(est.depletionAge).toBeNull();
-  });
-
-  it("retorna null sem histórico suficiente", () => {
-    expect(simulateEstimated([], base)).toBeNull();
   });
 });

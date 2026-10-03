@@ -1,14 +1,20 @@
 import { useEffect, useState } from "react";
 import type { ImportMeta, Position } from "../lib/types";
 import {
-  subscribeLatestImport,
   subscribePositions,
   subscribeRetirement,
   subscribeRules,
   subscribeTargets,
+  subscribeWealth,
 } from "../lib/firestore";
 import { useAuth } from "./useAuth";
-import type { InstrumentRule, RetirementPlan, Targets } from "../lib/types";
+import { useImports } from "./useImports";
+import type {
+  InstrumentRule,
+  RetirementPlan,
+  Targets,
+  WealthYear,
+} from "../lib/types";
 
 interface PortfolioState {
   importMeta: ImportMeta | null;
@@ -19,47 +25,40 @@ interface PortfolioState {
 
 export function usePortfolio(): PortfolioState {
   const { user } = useAuth();
-  const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
+  const { selected, loading: loadingImports } = useImports();
   const [positions, setPositions] = useState<Position[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingPos, setLoadingPos] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    return subscribeLatestImport(
-      user.uid,
-      (meta) => {
-        setImportMeta(meta);
-        if (!meta) {
-          setPositions([]);
-          setLoading(false);
-        }
-      },
-      (e) => {
-        setError(e.message);
-        setLoading(false);
-      },
-    );
-  }, [user]);
+  const importId = selected?.id;
 
   useEffect(() => {
-    if (!user || !importMeta) return;
+    if (!user || !importId) {
+      setPositions([]);
+      setLoadingPos(false);
+      return;
+    }
+    setLoadingPos(true);
     return subscribePositions(
       user.uid,
-      importMeta.id,
+      importId,
       (pos) => {
         setPositions(pos);
-        setLoading(false);
+        setLoadingPos(false);
       },
       (e) => {
         setError(e.message);
-        setLoading(false);
+        setLoadingPos(false);
       },
     );
-  }, [user, importMeta]);
+  }, [user, importId]);
 
-  return { importMeta, positions, loading, error };
+  return {
+    importMeta: selected,
+    positions,
+    loading: loadingImports || (!!importId && loadingPos),
+    error,
+  };
 }
 
 export function useRules(): {
@@ -129,4 +128,27 @@ export function useRetirementPlan(): {
   }, [user]);
 
   return { plan, loading };
+}
+
+export function useWealthYears(): {
+  years: WealthYear[];
+  loading: boolean;
+} {
+  const { user } = useAuth();
+  const [years, setYears] = useState<WealthYear[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeWealth(
+      user.uid,
+      (y) => {
+        setYears(y);
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+  }, [user]);
+
+  return { years, loading };
 }

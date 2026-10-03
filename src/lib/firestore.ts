@@ -2,7 +2,6 @@ import {
   collection,
   doc,
   getDocs,
-  limit,
   onSnapshot,
   orderBy,
   query,
@@ -18,6 +17,7 @@ import type {
   Position,
   RetirementPlan,
   Targets,
+  WealthYear,
 } from "./types";
 
 const BATCH_LIMIT = 450;
@@ -44,6 +44,10 @@ export function targetsRef(uid: string) {
 
 export function retirementRef(uid: string) {
   return doc(userRef(uid), "settings", "retirement");
+}
+
+export function wealthRef(uid: string) {
+  return doc(userRef(uid), "settings", "wealth");
 }
 
 /** Grava um novo snapshot: doc de import + posições em batches */
@@ -93,23 +97,6 @@ export async function deleteImport(uid: string, importId: string): Promise<void>
     await batch.commit();
   }
   await deleteDoc(doc(userRef(uid), "imports", importId));
-}
-
-/** Escuta o import mais recente */
-export function subscribeLatestImport(
-  uid: string,
-  cb: (meta: ImportMeta | null) => void,
-  onError?: (e: Error) => void,
-): Unsubscribe {
-  const q = query(importsRef(uid), orderBy("uploadedAt", "desc"), limit(1));
-  return onSnapshot(
-    q,
-    (snap) => {
-      const d = snap.docs[0];
-      cb(d ? ({ id: d.id, ...d.data() } as ImportMeta) : null);
-    },
-    onError,
-  );
 }
 
 export function subscribeImports(
@@ -222,4 +209,26 @@ export async function saveRetirement(
   plan: RetirementPlan,
 ): Promise<void> {
   await setDoc(retirementRef(uid), plan, { merge: true });
+}
+
+export function subscribeWealth(
+  uid: string,
+  cb: (years: WealthYear[]) => void,
+  onError?: (e: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    wealthRef(uid),
+    (snap) => {
+      const d = snap.exists() ? (snap.data() as { years?: WealthYear[] }) : null;
+      cb(d?.years ?? []);
+    },
+    onError,
+  );
+}
+
+export async function saveWealth(
+  uid: string,
+  years: WealthYear[],
+): Promise<void> {
+  await setDoc(wealthRef(uid), { years }, { merge: true });
 }

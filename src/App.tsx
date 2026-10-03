@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
+import { ImportProvider } from "./hooks/useImports";
 import { AppLayout } from "./components/layout/AppLayout";
 import { PageLoader } from "./components/ui/StatCard";
 import { LoginPage } from "./pages/LoginPage";
@@ -28,7 +29,9 @@ export default function App() {
           <Route
             element={
               <Protected>
-                <AppLayout />
+                <ImportProvider>
+                  <AppLayout />
+                </ImportProvider>
               </Protected>
             }
           >

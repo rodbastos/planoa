@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { FileSpreadsheet, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../hooks/useAuth";
-import { deleteImport, subscribeImports } from "../lib/firestore";
+import { useImports } from "../hooks/useImports";
+import { deleteImport } from "../lib/firestore";
 import type { ImportMeta } from "../lib/types";
 import { formatBRL, formatTimestamp } from "../lib/format";
 import { Card } from "../components/ui/Card";
@@ -12,18 +13,9 @@ import { PageLoader } from "../components/ui/StatCard";
 
 export function HistoricoPage() {
   const { user } = useAuth();
-  const [imports, setImports] = useState<ImportMeta[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { imports, selected, loading } = useImports();
   const [toDelete, setToDelete] = useState<ImportMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  useEffect(() => {
-    if (!user) return;
-    return subscribeImports(user.uid, (list) => {
-      setImports(list);
-      setLoading(false);
-    });
-  }, [user]);
 
   async function confirmDelete() {
     if (!user || !toDelete) return;
@@ -46,7 +38,8 @@ export function HistoricoPage() {
       <div>
         <h1 className="text-2xl font-bold">Histórico de importações</h1>
         <p className="text-sm text-muted-foreground">
-          A carteira exibida é sempre o snapshot mais recente.
+          Por padrão é exibido o snapshot mais recente — use o seletor de
+          planilha nas páginas para ver outra importação.
         </p>
       </div>
 
@@ -79,10 +72,16 @@ export function HistoricoPage() {
                 </p>
                 <p className="text-xs text-muted-foreground">patrimônio</p>
               </div>
-              {i === 0 && (
+              {imp.id === selected?.id ? (
                 <span className="rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
-                  atual
+                  em exibição
                 </span>
+              ) : (
+                i === 0 && (
+                  <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                    mais recente
+                  </span>
+                )
               )}
               <Button
                 variant="ghost"

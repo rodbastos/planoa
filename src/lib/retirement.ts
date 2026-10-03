@@ -85,77 +85,69 @@ export interface HistoryEstimate {
   depletionAge: number | null;
 }
 
-function annuityFV(r: number, months: number): number {
-  return r === 0 ? months : (Math.pow(1 + r, months) - 1) / r;
+export interface TrajectoryDynamics {
+  /** rentabilidade mensal observada (fração) */
+  monthlyRate: number;
+  /** fluxo médio mensal observado (aportes − resgates) */
+  monthlyContribution: number;
 }
 
-const clampRate = (r: number) => Math.min(Math.max(r, -0.1), 0.1);
-
 /**
- * Resolve, por bissecção, a taxa mensal r tal que
- * pv*(1+r)^m + pmt*annuity(m,r) = fv.
- * É o que separa rendimento de aporte no histórico.
+ * Dinâmica a partir do CSV anual da XP: média geométrica da rentabilidade
+ * anual e média dos fluxos (movimentações). O ano corrente é ignorado
+ * (dados parciais).
  */
-export function impliedMonthlyRate(
-  pv: number,
-  pmt: number,
-  months: number,
-  fv: number,
-): number {
-  const f = (r: number) =>
-    pv * Math.pow(1 + r, months) + pmt * annuityFV(r, months) - fv;
-  let lo = -0.5;
-  let hi = 0.5;
-  if (f(lo) >= 0) return lo;
-  if (f(hi) <= 0) return hi;
-  for (let i = 0; i < 80; i++) {
-    const mid = (lo + hi) / 2;
-    if (f(mid) > 0) hi = mid;
-    else lo = mid;
+export function dynamicsFromWealth(
+  years: { year: number; flows: number; returnPct: number }[],
+  currentYear = new Date().getFullYear(),
+): TrajectoryDynamics {
+  const complete = years.filter((y) => y.year < currentYear);
+  const use = complete.length > 0 ? complete : years;
+  let prod = 1;
+  let flows = 0;
+  for (const y of use) {
+    prod *= 1 + y.returnPct;
+    flows += y.flows;
   }
-  return (lo + hi) / 2;
+  const months = use.length * 12;
+  return {
+    monthlyRate: Math.pow(prod, 1 / months) - 1,
+    monthlyContribution: flows / months,
+  };
 }
 
 /**
- * Estima a dinâmica observada: aporte médio mensal (Δ total investido) e
- * rentabilidade mensal implícita. Sem "total investido" nos extremos, trata
- * todo o crescimento como rendimento (aporte = 0). Taxa limitada a ±10%/mês.
+ * Fallback sem CSV: tendência linear do patrimônio entre a primeira e a
+ * última importação (R$/mês). Não dá para separar aporte de rendimento só
+ * pelo patrimônio — então rende 0% e cresce no ritmo absoluto observado.
  */
-export function estimateDynamics(
-  imports: { date: number; patrimonio: number; totalInvestido?: number }[],
-): { monthlyRate: number; monthlyContribution: number } | null {
+export function dynamicsFromImports(
+  imports: { date: number; patrimonio: number }[],
+): TrajectoryDynamics | null {
   if (imports.length < 2) return null;
   const sorted = [...imports].sort((a, b) => a.date - b.date);
   const first = sorted[0];
   const last = sorted[sorted.length - 1];
   const months = ((last.date - first.date) / MS_PER_YEAR) * 12;
-  if (months < 1 || first.patrimonio <= 0 || last.patrimonio <= 0) return null;
-
-  if (first.totalInvestido === undefined || last.totalInvestido === undefined) {
-    const cagr = Math.pow(last.patrimonio / first.patrimonio, 1 / months) - 1;
-    return { monthlyRate: clampRate(cagr), monthlyContribution: 0 };
-  }
-
-  const pmt = (last.totalInvestido - first.totalInvestido) / months;
-  const r = impliedMonthlyRate(first.patrimonio, pmt, months, last.patrimonio);
-  return { monthlyRate: clampRate(r), monthlyContribution: pmt };
+  if (months < 1) return null;
+  return {
+    monthlyRate: 0,
+    monthlyContribution: (last.patrimonio - first.patrimonio) / months,
+  };
 }
 
 /**
- * Extrapola a trajetória observada: a partir da última importação, o
- * patrimônio rende a taxa implícita e recebe o aporte estimado até a idade
- * de resgate; depois passa a descontar a renda mensal desejada.
+ * Extrapola a trajetória observada: a partir do ponto âncora, o patrimônio
+ * rende a taxa observada e recebe o fluxo observado até a idade de resgate;
+ * depois passa a descontar a renda mensal desejada.
  */
 export function simulateEstimated(
-  imports: { date: number; patrimonio: number; totalInvestido?: number }[],
+  anchor: { date: number; patrimonio: number },
+  dyn: TrajectoryDynamics,
   plan: RetirementPlan,
   now = Date.now(),
-): HistoryEstimate | null {
-  const dyn = estimateDynamics(imports);
-  if (!dyn) return null;
-  const last = [...imports].sort((a, b) => a.date - b.date)[
-    imports.length - 1
-  ];
+): HistoryEstimate {
+  const last = anchor;
 
   const startAge = plan.currentAge + (last.date - now) / MS_PER_YEAR;
   const totalMonths = Math.max(0, Math.round((MAX_AGE - startAge) * 12));
@@ -186,4 +178,9 @@ export function simulateEstimated(
     points,
     depletionAge,
   };
+}
+
+/** timestamp do fim do ano; ano corrente conta como YTD (agora) */
+export function yearEndTs(year: number, now = Date.now()): number {
+  return Math.min(new Date(year, 11, 31, 23, 59).getTime(), now);
 }

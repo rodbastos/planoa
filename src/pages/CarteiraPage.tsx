@@ -3,6 +3,7 @@ import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../hooks/useAuth";
 import { usePortfolio } from "../hooks/usePortfolio";
+import { ImportSelector } from "../components/ImportSelector";
 import { saveRule } from "../lib/firestore";
 import { ASSET_CLASSES, PRODUCT_TYPES, type Position } from "../lib/types";
 import { formatBRL, formatDateISO, formatNumber, formatPct } from "../lib/format";
@@ -103,12 +104,15 @@ export function CarteiraPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">Carteira</h1>
-        <p className="text-sm text-muted-foreground">
-          {filtered.length} de {positions.length} posições ·{" "}
-          {formatBRL(totalFiltered)}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Carteira</h1>
+          <p className="text-sm text-muted-foreground">
+            {filtered.length} de {positions.length} posições ·{" "}
+            {formatBRL(totalFiltered)}
+          </p>
+        </div>
+        <ImportSelector className="w-72" />
       </div>
 
       <Card className="flex flex-wrap items-center gap-3 p-3">

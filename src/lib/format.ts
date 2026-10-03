@@ -97,6 +97,14 @@ export function formatDateISO(iso: string | undefined): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+export function formatDate(ms: number): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(ms));
+}
+
 export function formatTimestamp(ms: number): string {
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",

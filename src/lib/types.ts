@@ -88,6 +88,23 @@ export interface AllocationSlice {
   pct: number;
 }
 
+/** linha anual do relatório de patrimônio da XP (CSV) */
+export interface WealthYear {
+  year: number;
+  /** patrimônio no início do ano */
+  initial: number;
+  /** movimentações do ano: aportes − resgates */
+  flows: number;
+  /** IR + IOF pagos (negativo) */
+  taxes: number;
+  /** patrimônio no fim do ano */
+  final: number;
+  /** rendimento do ano em R$ */
+  returns: number;
+  /** rentabilidade do ano (fração, ex.: 0.0958) */
+  returnPct: number;
+}
+
 export interface RetirementPlan {
   /** rentabilidade real esperada, em % ao ano (ex.: 7) */
   realReturnPct: number;

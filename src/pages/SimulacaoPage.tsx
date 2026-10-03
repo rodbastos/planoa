@@ -1,11 +1,12 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
   type InputHTMLAttributes,
 } from "react";
-import { Save } from "lucide-react";
+import { Download, Save, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import {
   CartesianGrid,
@@ -19,10 +20,18 @@ import {
   YAxis,
 } from "recharts";
 import { useAuth } from "../hooks/useAuth";
-import { useRetirementPlan } from "../hooks/usePortfolio";
-import { saveRetirement, subscribeImports } from "../lib/firestore";
-import { simulateEstimated, simulateRetirement } from "../lib/retirement";
-import type { ImportMeta, RetirementPlan } from "../lib/types";
+import { useRetirementPlan, useWealthYears } from "../hooks/usePortfolio";
+import { importDate, useImports } from "../hooks/useImports";
+import { saveRetirement, saveWealth } from "../lib/firestore";
+import {
+  dynamicsFromImports,
+  dynamicsFromWealth,
+  simulateEstimated,
+  simulateRetirement,
+  yearEndTs,
+} from "../lib/retirement";
+import { parseWealthCsv } from "../lib/wealth-csv";
+import type { RetirementPlan } from "../lib/types";
 import { formatBRL, formatBRLCompact, formatPct } from "../lib/format";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -93,32 +102,29 @@ function PlanField({
 export function SimulacaoPage() {
   const { user } = useAuth();
   const { plan: savedPlan, loading: loadingPlan } = useRetirementPlan();
-  const [imports, setImports] = useState<ImportMeta[]>([]);
-  const [loadingImports, setLoadingImports] = useState(true);
+  const { years, loading: loadingWealth } = useWealthYears();
+  const { imports, loading: loadingImports } = useImports();
   const [draft, setDraft] = useState<RetirementPlan>(DEFAULT_PLAN);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!user) return;
-    return subscribeImports(user.uid, (list) => {
-      setImports(list);
-      setLoadingImports(false);
-    });
-  }, [user]);
+  const csvRef = useRef<HTMLInputElement>(null);
+  const [uploadingCsv, setUploadingCsv] = useState(false);
 
   // Preenche o draft: plano salvo, ou defaults (valor inicial = patrimônio atual)
   useEffect(() => {
-    if (dirty || loadingPlan || loadingImports) return;
+    if (dirty || loadingPlan || loadingImports || loadingWealth) return;
     if (savedPlan) {
       setDraft(savedPlan);
     } else {
       setDraft({
         ...DEFAULT_PLAN,
-        initialValue: imports[0]?.patrimonio ?? DEFAULT_PLAN.initialValue,
+        initialValue:
+          imports[0]?.patrimonio ??
+          years[years.length - 1]?.final ??
+          DEFAULT_PLAN.initialValue,
       });
     }
-  }, [savedPlan, imports, dirty, loadingPlan, loadingImports]);
+  }, [savedPlan, imports, years, dirty, loadingPlan, loadingImports, loadingWealth]);
 
   const set =
     (key: keyof RetirementPlan) => (e: ChangeEvent<HTMLInputElement>) => {
@@ -133,24 +139,49 @@ export function SimulacaoPage() {
   const effectiveImports = useMemo(
     () =>
       imports.map((imp) => ({
-        date: imp.referenceDate ?? imp.uploadedAt,
+        date: importDate(imp),
         patrimonio: imp.patrimonio,
-        totalInvestido: imp.totalInvestido,
       })),
     [imports],
   );
 
-  const result = useMemo(() => simulateRetirement(draft), [draft]);
-  const estimate = useMemo(
-    () => simulateEstimated(effectiveImports, draft),
-    [effectiveImports, draft],
+  // pontos anuais do CSV da XP (fim de ano; ano corrente = YTD)
+  const wealthPoints = useMemo(() => {
+    const now = Date.now();
+    return years.map((y) => ({
+      date: yearEndTs(y.year, now),
+      patrimonio: y.final,
+    }));
+  }, [years]);
+
+  const historyPoints = useMemo(
+    () =>
+      [...effectiveImports, ...wealthPoints].sort((a, b) => a.date - b.date),
+    [effectiveImports, wealthPoints],
   );
+
+  // dinâmica da trajetória: CSV (aporte e rendimento separados) > fallback
+  // linear a partir das importações
+  const dynamics = useMemo(
+    () =>
+      years.length > 0
+        ? dynamicsFromWealth(years)
+        : dynamicsFromImports(effectiveImports),
+    [years, effectiveImports],
+  );
+
+  const result = useMemo(() => simulateRetirement(draft), [draft]);
+  const estimate = useMemo(() => {
+    const anchor = historyPoints[historyPoints.length - 1];
+    if (!dynamics || !anchor) return null;
+    return simulateEstimated(anchor, dynamics, draft);
+  }, [historyPoints, dynamics, draft]);
 
   const rows = useMemo<ChartRow[]>(() => {
     const now = Date.now();
     const map = new Map<number, ChartRow>();
-    // histórico: cada importação vira um ponto na idade correspondente
-    for (const imp of effectiveImports) {
+    // histórico: cada observação vira um ponto na idade correspondente
+    for (const imp of historyPoints) {
       const age = draft.currentAge + (imp.date - now) / MS_PER_YEAR;
       const key = Math.round(age * 100) / 100;
       map.set(key, { idade: key, historico: imp.patrimonio });
@@ -169,7 +200,7 @@ export function SimulacaoPage() {
       map.set(key, row);
     }
     return [...map.values()].sort((a, b) => a.idade - b.idade);
-  }, [effectiveImports, estimate, result, draft.currentAge]);
+  }, [historyPoints, estimate, result, draft.currentAge]);
 
   const ageTicks = useMemo(() => {
     if (rows.length === 0) return [];
@@ -195,7 +226,39 @@ export function SimulacaoPage() {
     }
   }
 
-  if (loadingPlan || loadingImports) return <PageLoader />;
+  async function handleCsv(e: ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f || !user) return;
+    try {
+      const parsed = parseWealthCsv(await f.text());
+      if (parsed.length === 0) {
+        toast.error("Nenhum ano encontrado no CSV");
+        return;
+      }
+      setUploadingCsv(true);
+      await saveWealth(user.uid, parsed);
+      toast.success(
+        `${parsed.length} anos carregados (${parsed[0].year}–${parsed[parsed.length - 1].year})`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao ler CSV");
+    } finally {
+      setUploadingCsv(false);
+    }
+  }
+
+  async function removeWealth() {
+    if (!user) return;
+    try {
+      await saveWealth(user.uid, []);
+      toast.success("Histórico anual removido");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao remover");
+    }
+  }
+
+  if (loadingPlan || loadingImports || loadingWealth) return <PageLoader />;
 
   const faseResgate = draft.retirementAge <= draft.currentAge;
   const ultimoPonto = result.points[result.points.length - 1];
@@ -295,15 +358,62 @@ export function SimulacaoPage() {
           </CardContent>
         </Card>
 
-        <Card className="xl:col-span-2">
+        <Card>
+          <CardHeader
+            title="Histórico anual (CSV da XP)"
+            subtitle={
+              years.length > 0
+                ? `${years[0].year}–${years[years.length - 1].year} · ${years.length} anos`
+                : "patrimônio, movimentações e rendimento por ano"
+            }
+            action={
+              years.length > 0 ? (
+                <Button variant="ghost" size="sm" onClick={removeWealth} title="Remover">
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              ) : undefined
+            }
+          />
+          <CardContent className="space-y-3">
+            <input
+              ref={csvRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={handleCsv}
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => csvRef.current?.click()}
+                disabled={uploadingCsv}
+              >
+                <Upload className="h-4 w-4" />
+                {years.length > 0 ? "Substituir CSV" : "Enviar CSV"}
+              </Button>
+              <a href="/modelo-patrimonio-anual.csv" download>
+                <Button variant="ghost" size="sm">
+                  <Download className="h-4 w-4" /> Baixar modelo
+                </Button>
+              </a>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Uma linha por ano. "Movimentações" = aportes − resgates;
+              "Rendimento" = ganho do ano em R$.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="xl:col-span-2 xl:order-first xl:row-span-2">
           <CardHeader
             title="Patrimônio: trajetória vs planejado"
             subtitle={
               estimate
                 ? `trajetória observada ≈ ${formatPct(estimate.annualRate)} a.a. + ${formatBRL(estimate.monthlyContribution)}/mês`
-                : imports.length === 0
-                  ? "Importe planilhas para ver seu histórico no gráfico"
-                  : "Importe mais uma planilha para estimar sua trajetória"
+                : historyPoints.length === 0
+                  ? "Envie o CSV anual ou importe planilhas para ver seu histórico"
+                  : "Mais um ponto de histórico permite estimar sua trajetória"
             }
           />
           <CardContent>
@@ -414,7 +524,8 @@ export function SimulacaoPage() {
                     : "não se esgotaria"
                 }.`}
               {imports.length === 0 &&
-                " Nenhuma importação ainda — envie planilhas em Importar para comparar."}
+                years.length === 0 &&
+                " Nenhum histórico ainda — envie o CSV anual ou importe planilhas para comparar."}
             </p>
           </CardContent>
         </Card>

@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { useAuth } from "../hooks/useAuth";
 import { usePortfolio, useTargets } from "../hooks/usePortfolio";
+import { ImportSelector } from "../components/ImportSelector";
 import { saveTargets } from "../lib/firestore";
 import {
   compareWithTargets,
@@ -91,12 +92,15 @@ export function CarteiraIdealPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Carteira Ideal</h1>
-        <p className="text-sm text-muted-foreground">
-          Defina a alocação alvo e compare com a carteira atual. Valores em % —
-          a soma deve ser 100%.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Carteira Ideal</h1>
+          <p className="text-sm text-muted-foreground">
+            Defina a alocação alvo e compare com a carteira atual. Valores em %
+            — a soma deve ser 100%.
+          </p>
+        </div>
+        <ImportSelector className="w-72" />
       </div>
 
       <Tabs
