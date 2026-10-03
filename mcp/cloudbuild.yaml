@@ -5,12 +5,12 @@ steps:
     args:
       - "build"
       - "-t"
-      - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:$COMMIT_SHA"
+      - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:$BUILD_ID"
       - "-t"
       - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:latest"
       - "-f"
       - "mcp/Dockerfile"
       - "."
 images:
-  - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:$COMMIT_SHA"
+  - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:$BUILD_ID"
   - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:latest"

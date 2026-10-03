@@ -122,7 +122,13 @@ gcloud run deploy alloca-mcp \
   --memory 512Mi --min-instances 0 --max-instances 2
 ```
 
-No ChatGPT: `https://alloca-mcp-<hash>-uc.a.run.app/mcp?token=SEU_SEGREDO`.
+No ChatGPT (Developer mode → conector MCP):
+
+`https://alloca-mcp-1038890628386.us-central1.run.app/mcp?token=<MCP_AUTH_TOKEN>`
+
+O token está configurado como env var do serviço — veja/edite em
+`gcloud run services describe alloca-mcp --region us-central1` ou
+`--update-env-vars MCP_AUTH_TOKEN=novo` para rotacionar.
 
 **Custo estimado: ~US$ 0/mês** para uso pessoal — ver seção de custos
 abaixo. Para redeploy após mudanças: repita os passos 3 e 4.
