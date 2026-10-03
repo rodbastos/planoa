@@ -1,0 +1,63 @@
+import type { AllocationSlice, Position, Targets } from "./types";
+
+export function totalBalance(positions: Position[]): number {
+  return positions.reduce((acc, p) => acc + (p.balance || 0), 0);
+}
+
+export function groupBy(
+  positions: Position[],
+  key: "assetClass" | "productType" | "sourceSection",
+): AllocationSlice[] {
+  const map = new Map<string, number>();
+  for (const p of positions) {
+    const k = p[key] || "Outros";
+    map.set(k, (map.get(k) ?? 0) + (p.balance || 0));
+  }
+  const total = totalBalance(positions) || 1;
+  return [...map.entries()]
+    .map(([k, balance]) => ({ key: k, balance, pct: balance / total }))
+    .sort((a, b) => b.balance - a.balance);
+}
+
+export interface DeltaRow {
+  key: string;
+  currentPct: number;
+  targetPct: number;
+  currentBRL: number;
+  targetBRL: number;
+  deltaBRL: number; // positivo = falta alocar (comprar); negativo = excesso
+}
+
+/** Compara alocação atual vs carteira ideal */
+export function compareWithTargets(
+  positions: Position[],
+  targets: Record<string, number>,
+  key: "assetClass" | "productType",
+): DeltaRow[] {
+  const slices = groupBy(positions, key);
+  const total = totalBalance(positions);
+  const keys = new Set<string>([...slices.map((s) => s.key), ...Object.keys(targets)]);
+  const rows: DeltaRow[] = [];
+  for (const k of keys) {
+    const cur = slices.find((s) => s.key === k);
+    const currentPct = cur?.pct ?? 0;
+    const targetPct = (targets[k] ?? 0) / 100;
+    const currentBRL = cur?.balance ?? 0;
+    const targetBRL = targetPct * total;
+    rows.push({
+      key: k,
+      currentPct,
+      targetPct,
+      currentBRL,
+      targetBRL,
+      deltaBRL: targetBRL - currentBRL,
+    });
+  }
+  return rows.sort((a, b) => Math.abs(b.deltaBRL) - Math.abs(a.deltaBRL));
+}
+
+export const EMPTY_TARGETS: Targets = { byAssetClass: {}, byProductType: {} };
+
+export function targetsSum(targets: Record<string, number>): number {
+  return Object.values(targets).reduce((a, b) => a + (b || 0), 0);
+}
