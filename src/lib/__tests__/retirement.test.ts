@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  coastFire,
   dynamicsFromImports,
   dynamicsFromWealth,
   monthlyRealRate,
@@ -67,6 +68,53 @@ describe("simulateRetirement", () => {
     const atRetire = r.points.find((p) => p.age === 64);
     expect(atRetire).toBeDefined();
     expect(atRetire!.patrimonio).toBeCloseTo(r.accumulated, 6);
+  });
+});
+
+describe("coastFire", () => {
+  it("fireTarget = VP das retiradas mensais até os 110 anos", () => {
+    const c = coastFire(base);
+    const r = monthlyRealRate(7);
+    const n = (110 - 64) * 12;
+    const esperado = (35_000 * (1 - Math.pow(1 + r, -n))) / r;
+    expect(c.fireTarget).toBeCloseTo(esperado, 6);
+  });
+
+  it("coastToday desconta o fireTarget pelos anos até o resgate", () => {
+    const c = coastFire(base);
+    expect(c.coastToday).toBeCloseTo(c.fireTarget / Math.pow(1.07, 15), 6);
+  });
+
+  it("já é Coast FIRE quando o valor inicial cobre o necessário", () => {
+    const c = coastFire({ ...base, initialValue: 100_000_000 });
+    expect(c.alreadyCoast).toBe(true);
+    expect(c.coastAge).toBe(base.currentAge);
+  });
+
+  it("aporte alto cruza a curva antes da idade de resgate", () => {
+    const c = coastFire({ ...base, monthlyContribution: 30_000 });
+    expect(c.alreadyCoast).toBe(false);
+    expect(c.coastAge).not.toBeNull();
+    expect(c.coastAge!).toBeGreaterThan(base.currentAge);
+    expect(c.coastAge!).toBeLessThanOrEqual(base.retirementAge);
+  });
+
+  it("aporte modesto pode não cruzar a curva antes dos resgates", () => {
+    // base: 1,5M + 5k/mês não alcança a curva de ~2,1M que cresce a 7% a.a.
+    const c = coastFire(base);
+    expect(c.alreadyCoast).toBe(false);
+    expect(c.coastAge).toBeNull();
+  });
+
+  it("sem aportes e abaixo da curva, nunca alcança (crescem na mesma taxa)", () => {
+    const c = coastFire({ ...base, initialValue: 1, monthlyContribution: 0 });
+    expect(c.alreadyCoast).toBe(false);
+    expect(c.coastAge).toBeNull();
+  });
+
+  it("já na fase de resgate, o Coast FIRE é o próprio fireTarget", () => {
+    const c = coastFire({ ...base, retirementAge: 49 });
+    expect(c.coastToday).toBeCloseTo(c.fireTarget, 6);
   });
 });
 

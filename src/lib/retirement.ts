@@ -91,6 +91,60 @@ export function simulateRetirement(plan: RetirementPlan): RetirementResult {
   };
 }
 
+export interface CoastFireResult {
+  /** patrimônio necessário na idade de resgate para bancar a renda até MAX_AGE */
+  fireTarget: number;
+  /** fireTarget trazido a valor presente: o Coast FIRE na idade atual */
+  coastToday: number;
+  /** idade em que o plano cruza a curva de Coast FIRE; null = não cruza antes dos resgates */
+  coastAge: number | null;
+  /** valor inicial já cobre o Coast FIRE de hoje */
+  alreadyCoast: boolean;
+}
+
+/**
+ * Coast FIRE: quanto bastaria ter investido hoje para o patrimônio crescer
+ * sozinho (sem mais aportes) até bancar a renda desejada na fase de resgate.
+ * `fireTarget` é o valor presente das retiradas mensais até MAX_AGE na taxa
+ * real do plano — a curva de Coast FIRE cresce à mesma taxa real, então o
+ * cruzamento acontece quando o saldo projetado com aportes a alcança.
+ */
+export function coastFire(plan: RetirementPlan): CoastFireResult {
+  const r = realMonthlyRate(plan.nominalReturnPct, plan.inflationPct);
+  const retireMonths = Math.max(
+    0,
+    Math.round((plan.retirementAge - plan.currentAge) * 12),
+  );
+  const drawMonths = Math.max(
+    0,
+    Math.round((MAX_AGE - plan.retirementAge) * 12),
+  );
+
+  // VP das retiradas mensais (anuidade) durante a fase de resgate
+  const fireTarget =
+    r === 0
+      ? plan.desiredMonthlyIncome * drawMonths
+      : (plan.desiredMonthlyIncome * (1 - Math.pow(1 + r, -drawMonths))) / r;
+
+  const coastToday = fireTarget / Math.pow(1 + r, retireMonths);
+  const alreadyCoast = plan.initialValue >= coastToday;
+
+  // cruza quando o saldo projetado (valor inicial + aportes) alcança a curva
+  let coastAge: number | null = alreadyCoast ? plan.currentAge : null;
+  if (!alreadyCoast) {
+    let balance = plan.initialValue;
+    for (let m = 1; m <= retireMonths; m++) {
+      balance = balance * (1 + r) + plan.monthlyContribution;
+      if (balance >= fireTarget / Math.pow(1 + r, retireMonths - m)) {
+        coastAge = plan.currentAge + m / 12;
+        break;
+      }
+    }
+  }
+
+  return { fireTarget, coastToday, coastAge, alreadyCoast };
+}
+
 export interface HistoryEstimate {
   /** rentabilidade mensal implícita do histórico (aportes já separados) */
   monthlyRate: number;

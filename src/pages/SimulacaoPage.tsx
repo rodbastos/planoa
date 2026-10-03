@@ -24,6 +24,7 @@ import { useRetirementPlan, useWealthYears } from "../hooks/usePortfolio";
 import { importDate, useImports } from "../hooks/useImports";
 import { saveRetirement, saveWealth } from "../lib/firestore";
 import {
+  coastFire,
   dynamicsFromImports,
   dynamicsFromWealth,
   realAnnualRate,
@@ -181,6 +182,7 @@ export function SimulacaoPage() {
   );
 
   const result = useMemo(() => simulateRetirement(draft), [draft]);
+  const coast = useMemo(() => coastFire(draft), [draft]);
   const estimate = useMemo(() => {
     const anchor = historyPoints[historyPoints.length - 1];
     if (!dynamics || !anchor) return null;
@@ -542,6 +544,52 @@ export function SimulacaoPage() {
                 />
               </LineChart>
             </ResponsiveContainer>
+            <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Coast FIRE hoje
+                </p>
+                <p className="mt-0.5 text-lg font-bold text-foreground">
+                  {formatBRL(coast.coastToday)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {coast.alreadyCoast
+                    ? "o patrimônio atual já supera esse valor"
+                    : "quanto bastaria ter para nunca mais aportar"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Tempo até o Coast FIRE
+                </p>
+                <p className="mt-0.5 text-lg font-bold text-foreground">
+                  {coast.alreadyCoast
+                    ? "Já atingido"
+                    : coast.coastAge != null
+                      ? `~${(coast.coastAge - draft.currentAge).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} anos`
+                      : "—"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {coast.alreadyCoast
+                    ? "aportes passam a ser opcionais"
+                    : coast.coastAge != null
+                      ? `por volta dos ${Math.round(coast.coastAge)} anos`
+                      : "aportes atuais não cruzam a curva antes dos resgates"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  FIRE target
+                </p>
+                <p className="mt-0.5 text-lg font-bold text-foreground">
+                  {formatBRL(coast.fireTarget)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  meta aos {draft.retirementAge} anos, para bancar a renda até
+                  os 110
+                </p>
+              </div>
+            </div>
             <p className="mt-2 text-xs text-muted-foreground">
               Plano projetado até{" "}
               {result.depletionAge != null

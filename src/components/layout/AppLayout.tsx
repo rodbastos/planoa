@@ -7,6 +7,8 @@ import {
   LogOut,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings,
   Sun,
   Target,
@@ -38,20 +40,35 @@ function useTheme() {
   return { dark, toggle: () => setDark((d) => !d) };
 }
 
-function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
+function SidebarContent({
+  onNavigate,
+  collapsed = false,
+  onToggleCollapse,
+}: {
+  onNavigate?: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}) {
   const { user, logout } = useAuth();
   const { dark, toggle } = useTheme();
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex items-center gap-3 px-5 py-5">
+      <div
+        className={cn(
+          "flex items-center gap-3 px-5 py-5",
+          collapsed && "justify-center px-0",
+        )}
+      >
         <img src="/logo-mark.png" alt="Plano A" className="h-9 w-9 object-contain" />
-        <div>
-          <p className="text-base font-bold text-white leading-tight">Plano A</p>
-          <p className="text-[11px] text-sidebar-foreground/70">
-            Gestão de investimentos
-          </p>
-        </div>
+        {!collapsed && (
+          <div>
+            <p className="text-base font-bold text-white leading-tight">Plano A</p>
+            <p className="text-[11px] text-sidebar-foreground/70">
+              Gestão de investimentos
+            </p>
+          </div>
+        )}
       </div>
 
       <nav className="mt-2 flex-1 space-y-1 px-3">
@@ -61,9 +78,11 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             to={to}
             end={end}
             onClick={onNavigate}
+            title={collapsed ? label : undefined}
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                collapsed && "justify-center px-0",
                 isActive
                   ? "bg-white/10 text-white"
                   : "text-sidebar-foreground hover:bg-white/5 hover:text-white",
@@ -71,7 +90,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             }
           >
             <Icon className="h-4.5 w-4.5 shrink-0" />
-            {label}
+            {!collapsed && label}
           </NavLink>
         ))}
       </nav>
@@ -79,12 +98,38 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       <div className="border-t border-white/10 p-3">
         <button
           onClick={toggle}
-          className="mb-2 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-foreground hover:bg-white/5 hover:text-white cursor-pointer"
+          title={collapsed ? (dark ? "Modo claro" : "Modo escuro") : undefined}
+          className={cn(
+            "mb-2 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-foreground hover:bg-white/5 hover:text-white cursor-pointer",
+            collapsed && "justify-center px-0",
+          )}
         >
           {dark ? <Sun className="h-4.5 w-4.5" /> : <Moon className="h-4.5 w-4.5" />}
-          {dark ? "Modo claro" : "Modo escuro"}
+          {!collapsed && (dark ? "Modo claro" : "Modo escuro")}
         </button>
-        <div className="flex items-center gap-3 rounded-lg px-3 py-2">
+        {onToggleCollapse && (
+          <button
+            onClick={onToggleCollapse}
+            title={collapsed ? "Expandir menu" : "Recolher menu"}
+            className={cn(
+              "mb-2 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-foreground hover:bg-white/5 hover:text-white cursor-pointer",
+              collapsed && "justify-center px-0",
+            )}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="h-4.5 w-4.5" />
+            ) : (
+              <PanelLeftClose className="h-4.5 w-4.5" />
+            )}
+            {!collapsed && "Recolher menu"}
+          </button>
+        )}
+        <div
+          className={cn(
+            "flex items-center gap-3 rounded-lg px-3 py-2",
+            collapsed && "flex-col px-0",
+          )}
+        >
           {user?.photoURL ? (
             <img src={user.photoURL} alt="" className="h-8 w-8 rounded-full" />
           ) : (
@@ -92,14 +137,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               {user?.displayName?.[0] ?? "?"}
             </div>
           )}
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-white">
-              {user?.displayName ?? "Usuário"}
-            </p>
-            <p className="truncate text-[11px] text-sidebar-foreground/70">
-              {user?.email}
-            </p>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">
+                {user?.displayName ?? "Usuário"}
+              </p>
+              <p className="truncate text-[11px] text-sidebar-foreground/70">
+                {user?.email}
+              </p>
+            </div>
+          )}
           <button
             onClick={logout}
             title="Sair"
@@ -115,12 +162,27 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
 export function AppLayout({ children }: { children?: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("planoa-sidebar-collapsed") === "1",
+  );
+
+  useEffect(() => {
+    localStorage.setItem("planoa-sidebar-collapsed", collapsed ? "1" : "0");
+  }, [collapsed]);
 
   return (
     <div className="flex h-screen overflow-hidden">
       {/* sidebar desktop */}
-      <aside className="hidden w-64 shrink-0 lg:block">
-        <SidebarContent />
+      <aside
+        className={cn(
+          "hidden shrink-0 transition-all duration-300 lg:block",
+          collapsed ? "w-20" : "w-64",
+        )}
+      >
+        <SidebarContent
+          collapsed={collapsed}
+          onToggleCollapse={() => setCollapsed((c) => !c)}
+        />
       </aside>
 
       {/* drawer mobile */}
