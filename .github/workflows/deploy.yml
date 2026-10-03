@@ -33,7 +33,7 @@ jobs:
       - name: Deploy Firestore rules & indexes
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/sa.json
-          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PLANO_ALLOCA }}
         run: |
           echo "$FIREBASE_SA" > "$GOOGLE_APPLICATION_CREDENTIALS"
           npx firebase-tools deploy --only firestore --project plano-alloca --non-interactive
@@ -43,6 +43,6 @@ jobs:
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PLANO_ALLOCA }}
           channelId: live
           projectId: plano-alloca
