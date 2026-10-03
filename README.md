@@ -131,4 +131,14 @@ users/{uid}/
     positions/{positionId}        # posições do snapshot
   instrumentRules/{key}           # overrides de classificação por instrumento
   settings/targets                # carteira ideal (por classe e por tipo)
+  settings/retirement             # plano de aposentadoria
+  settings/wealth                 # histórico patrimonial anual
 ```
+
+## Servidor MCP (`mcp/`)
+
+Pacote separado que expõe a carteira a IAs via Model Context Protocol —
+leitura (posições, snapshots, alocação, alvo, rentabilidade, vencimentos,
+histórico, aposentadoria, simulações) e escrita (alvo, plano, regras de
+classificação, uploads). Roda em stdio (clientes locais) ou HTTP (ChatGPT
+via túnel). Setup e lista de tools: [mcp/README.md](mcp/README.md).

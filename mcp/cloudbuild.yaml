@@ -1,0 +1,16 @@
+# Build da imagem no Cloud Build — rode da raiz do repo:
+#   gcloud builds submit --config mcp/cloudbuild.yaml --project plano-alloca .
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:$COMMIT_SHA"
+      - "-t"
+      - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:latest"
+      - "-f"
+      - "mcp/Dockerfile"
+      - "."
+images:
+  - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:$COMMIT_SHA"
+  - "us-central1-docker.pkg.dev/plano-alloca/alloca-mcp/alloca-mcp:latest"

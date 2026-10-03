@@ -1,0 +1,13 @@
+node_modules
+mcp/node_modules
+dist
+docs
+.firebase
+.github
+.git
+*.png
+.env
+.env.local
+mcp/.env
+mcp/service-account*.json
+mcp/cloudbuild.yaml

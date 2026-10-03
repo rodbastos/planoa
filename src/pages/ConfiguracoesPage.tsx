@@ -90,6 +90,62 @@ export function ConfiguracoesPage() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader
+          title="Acesso via MCP"
+          subtitle="Conecte IAs (Claude, ChatGPT, Cursor…) à sua carteira pelo servidor em mcp/"
+        />
+        <CardContent className="space-y-4 text-sm">
+          <div>
+            <p className="mb-1.5 font-medium">Clientes locais (stdio)</p>
+            <p className="mb-2 text-muted-foreground">
+              Registre o servidor na config do cliente — ele sobe
+              automaticamente quando o app de IA abre:
+            </p>
+            <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-xs leading-relaxed">
+{`{
+  "mcpServers": {
+    "alloca": {
+      "command": "npx",
+      "args": ["tsx", "src/index.ts"],
+      "cwd": "<raiz-do-repo>/mcp"
+    }
+  }
+}`}
+            </pre>
+          </div>
+
+          <div>
+            <p className="mb-1.5 font-medium">ChatGPT (HTTP remoto)</p>
+            <p className="mb-2 text-muted-foreground">
+              Suba o servidor em modo HTTP e exponha via túnel ou Cloud Run:
+            </p>
+            <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-xs leading-relaxed">
+{`cd mcp && npm run start:http        # localhost:8787/mcp
+cloudflared tunnel --url http://localhost:8787`}
+            </pre>
+            <p className="mt-2 text-muted-foreground">
+              No conector do ChatGPT, use{" "}
+              <code className="rounded bg-muted/50 px-1 font-mono text-xs">
+                https://&lt;url&gt;/mcp?token=&lt;MCP_AUTH_TOKEN&gt;
+              </code>
+              . Para ficar sempre online sem o PC ligado, faça deploy no
+              Cloud Run — comandos e custos em{" "}
+              <code className="rounded bg-muted/50 px-1 font-mono text-xs">
+                mcp/README.md
+              </code>
+              .
+            </p>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Tools disponíveis: posições, snapshots, alocação, carteira alvo,
+            rentabilidade, vencimentos, histórico, plano de aposentadoria e
+            simulações — além de escrita (alvo, plano, regras e uploads).
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
