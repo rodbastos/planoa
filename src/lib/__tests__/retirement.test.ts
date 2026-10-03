@@ -17,6 +17,7 @@ const base: RetirementPlan = {
   initialValue: 1_500_000,
   monthlyContribution: 5_000,
   desiredMonthlyIncome: 35_000,
+  lifeExpectancy: 110,
 };
 
 describe("monthlyRealRate", () => {
@@ -115,6 +116,15 @@ describe("coastFire", () => {
   it("já na fase de resgate, o Coast FIRE é o próprio fireTarget", () => {
     const c = coastFire({ ...base, retirementAge: 49 });
     expect(c.coastToday).toBeCloseTo(c.fireTarget, 6);
+  });
+
+  it("expectativa de vida menor reduz o fireTarget", () => {
+    const r = monthlyRealRate(7);
+    const c = coastFire({ ...base, lifeExpectancy: 90 });
+    const n = (90 - 64) * 12;
+    const esperado = (35_000 * (1 - Math.pow(1 + r, -n))) / r;
+    expect(c.fireTarget).toBeCloseTo(esperado, 6);
+    expect(c.fireTarget).toBeLessThan(coastFire(base).fireTarget);
   });
 });
 

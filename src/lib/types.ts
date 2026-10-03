@@ -117,4 +117,6 @@ export interface RetirementPlan {
   monthlyContribution: number;
   /** renda passiva mensal desejada na fase de resgate */
   desiredMonthlyIncome: number;
+  /** expectativa de vida: a simulação e a meta de retiradas vão até essa idade */
+  lifeExpectancy: number;
 }

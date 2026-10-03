@@ -10,13 +10,12 @@ export interface RetirementResult {
   accumulated: number;
   /** renda anual desejada / patrimônio acumulado (fração, ex.: 0.074) */
   annualWithdrawalRate: number;
-  /** idade em que o patrimônio zera; null = não se esgota até MAX_AGE */
+  /** idade em que o patrimônio zera; null = não se esgota até a expectativa de vida */
   depletionAge: number | null;
   /** série do patrimônio projetado (um ponto por ano) */
   points: ProjectionPoint[];
 }
 
-const MAX_AGE = 110;
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
 /** taxa mensal equivalente a uma taxa anual em % (ex.: 7 -> ~0.5654%) */
@@ -48,13 +47,15 @@ export function realAnnualRate(plan: RetirementPlan): number {
 export function simulateRetirement(plan: RetirementPlan): RetirementResult {
   // a simulação roda em termos reais: nominal deflacionada pela inflação
   const r = realMonthlyRate(plan.nominalReturnPct, plan.inflationPct);
-  const accumMonths = Math.max(
-    0,
-    Math.round((plan.retirementAge - plan.currentAge) * 12),
-  );
   const totalMonths = Math.max(
     0,
-    Math.round((MAX_AGE - plan.currentAge) * 12),
+    Math.round((plan.lifeExpectancy - plan.currentAge) * 12),
+  );
+  // se a expectativa de vida for menor que a idade de resgate, a fase de
+  // acumulação é encurtada até o fim da simulação
+  const accumMonths = Math.min(
+    Math.max(0, Math.round((plan.retirementAge - plan.currentAge) * 12)),
+    totalMonths,
   );
 
   let balance = plan.initialValue;
@@ -92,7 +93,7 @@ export function simulateRetirement(plan: RetirementPlan): RetirementResult {
 }
 
 export interface CoastFireResult {
-  /** patrimônio necessário na idade de resgate para bancar a renda até MAX_AGE */
+  /** patrimônio necessário na idade de resgate para bancar a renda até a expectativa de vida */
   fireTarget: number;
   /** fireTarget trazido a valor presente: o Coast FIRE na idade atual */
   coastToday: number;
@@ -105,7 +106,8 @@ export interface CoastFireResult {
 /**
  * Coast FIRE: quanto bastaria ter investido hoje para o patrimônio crescer
  * sozinho (sem mais aportes) até bancar a renda desejada na fase de resgate.
- * `fireTarget` é o valor presente das retiradas mensais até MAX_AGE na taxa
+ * `fireTarget` é o valor presente das retiradas mensais até a expectativa de
+ * vida na taxa
  * real do plano — a curva de Coast FIRE cresce à mesma taxa real, então o
  * cruzamento acontece quando o saldo projetado com aportes a alcança.
  */
@@ -117,7 +119,7 @@ export function coastFire(plan: RetirementPlan): CoastFireResult {
   );
   const drawMonths = Math.max(
     0,
-    Math.round((MAX_AGE - plan.retirementAge) * 12),
+    Math.round((plan.lifeExpectancy - plan.retirementAge) * 12),
   );
 
   // VP das retiradas mensais (anuidade) durante a fase de resgate
@@ -231,7 +233,10 @@ export function simulateEstimated(
   const last = anchor;
 
   const startAge = plan.currentAge + (last.date - now) / MS_PER_YEAR;
-  const totalMonths = Math.max(0, Math.round((MAX_AGE - startAge) * 12));
+  const totalMonths = Math.max(
+    0,
+    Math.round((plan.lifeExpectancy - startAge) * 12),
+  );
 
   let balance = last.patrimonio;
   let depletionAge: number | null = null;

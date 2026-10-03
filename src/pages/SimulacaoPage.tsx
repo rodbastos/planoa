@@ -51,6 +51,7 @@ const DEFAULT_PLAN: RetirementPlan = {
   initialValue: 1_500_000,
   monthlyContribution: 5_000,
   desiredMonthlyIncome: 35_000,
+  lifeExpectancy: 110,
 };
 
 interface ChartRow {
@@ -367,6 +368,14 @@ export function SimulacaoPage() {
               onChange={set("retirementAge")}
             />
             <PlanField
+              label="Expectativa de vida"
+              suffix="anos"
+              min={0}
+              step={1}
+              value={draft.lifeExpectancy}
+              onChange={set("lifeExpectancy")}
+            />
+            <PlanField
               label="Valor inicial"
               prefix="R$"
               step={10000}
@@ -545,50 +554,46 @@ export function SimulacaoPage() {
               </LineChart>
             </ResponsiveContainer>
             <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-3">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Coast FIRE hoje
-                </p>
-                <p className="mt-0.5 text-lg font-bold text-foreground">
-                  {formatBRL(coast.coastToday)}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {coast.alreadyCoast
+              <StatCard
+                className="p-4"
+                label="Coast FIRE hoje"
+                value={
+                  <span className="text-lg">{formatBRL(coast.coastToday)}</span>
+                }
+                hint={
+                  coast.alreadyCoast
                     ? "o patrimônio atual já supera esse valor"
-                    : "quanto bastaria ter para nunca mais aportar"}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Tempo até o Coast FIRE
-                </p>
-                <p className="mt-0.5 text-lg font-bold text-foreground">
-                  {coast.alreadyCoast
-                    ? "Já atingido"
-                    : coast.coastAge != null
-                      ? `~${(coast.coastAge - draft.currentAge).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} anos`
-                      : "—"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {coast.alreadyCoast
+                    : "quanto bastaria ter para nunca mais aportar"
+                }
+              />
+              <StatCard
+                className="p-4"
+                label="Tempo até o Coast FIRE"
+                value={
+                  <span className="text-lg">
+                    {coast.alreadyCoast
+                      ? "Já atingido"
+                      : coast.coastAge != null
+                        ? `~${(coast.coastAge - draft.currentAge).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} anos`
+                        : "—"}
+                  </span>
+                }
+                hint={
+                  coast.alreadyCoast
                     ? "aportes passam a ser opcionais"
                     : coast.coastAge != null
                       ? `por volta dos ${Math.round(coast.coastAge)} anos`
-                      : "aportes atuais não cruzam a curva antes dos resgates"}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  FIRE target
-                </p>
-                <p className="mt-0.5 text-lg font-bold text-foreground">
-                  {formatBRL(coast.fireTarget)}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  meta aos {draft.retirementAge} anos, para bancar a renda até
-                  os 110
-                </p>
-              </div>
+                      : "aportes atuais não cruzam a curva antes dos resgates"
+                }
+              />
+              <StatCard
+                className="p-4"
+                label="FIRE target"
+                value={
+                  <span className="text-lg">{formatBRL(coast.fireTarget)}</span>
+                }
+                hint={`meta aos ${draft.retirementAge} anos, para bancar a renda até os ${draft.lifeExpectancy}`}
+              />
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               Plano projetado até{" "}
