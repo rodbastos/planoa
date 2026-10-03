@@ -14,6 +14,8 @@ const PALETTE = [
 ];
 
 const CLASS_COLORS: Record<string, string> = {
+  "IPCA Longo": "#568DB0",
+  "IPCA Médio": "#8FB6CE",
   "Inflação": "#568DB0",
   "Pós-Fixado CDI": "#258A84",
   "Prefixado": "#0B2033",
@@ -36,5 +38,6 @@ export function categoryColor(key: string): string {
 export const CHART = {
   current: "#258A84",
   target: "#0B2033",
+  planned: "#568DB0",
   grid: "rgba(120,140,155,0.25)",
 };

@@ -8,6 +8,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { CarteiraPage } from "./pages/CarteiraPage";
 import { ImportarPage } from "./pages/ImportarPage";
 import { CarteiraIdealPage } from "./pages/CarteiraIdealPage";
+import { SimulacaoPage } from "./pages/SimulacaoPage";
 import { HistoricoPage } from "./pages/HistoricoPage";
 import { ConfiguracoesPage } from "./pages/ConfiguracoesPage";
 
@@ -35,6 +36,7 @@ export default function App() {
             <Route path="/carteira" element={<CarteiraPage />} />
             <Route path="/importar" element={<ImportarPage />} />
             <Route path="/carteira-ideal" element={<CarteiraIdealPage />} />
+            <Route path="/simulacao" element={<SimulacaoPage />} />
             <Route path="/historico" element={<HistoricoPage />} />
             <Route path="/configuracoes" element={<ConfiguracoesPage />} />
           </Route>

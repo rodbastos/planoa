@@ -12,7 +12,13 @@ import {
   type Unsubscribe,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { ImportMeta, InstrumentRule, Position, Targets } from "./types";
+import type {
+  ImportMeta,
+  InstrumentRule,
+  Position,
+  RetirementPlan,
+  Targets,
+} from "./types";
 
 const BATCH_LIMIT = 450;
 
@@ -36,6 +42,10 @@ export function targetsRef(uid: string) {
   return doc(userRef(uid), "settings", "targets");
 }
 
+export function retirementRef(uid: string) {
+  return doc(userRef(uid), "settings", "retirement");
+}
+
 /** Grava um novo snapshot: doc de import + posições em batches */
 export async function saveImport(
   uid: string,
@@ -44,12 +54,16 @@ export async function saveImport(
     patrimonio: number;
     totalInvestido: number;
     saldoDisponivel: number;
+    referenceDate?: number;
   },
   positions: Position[],
 ): Promise<string> {
   const importDoc = doc(importsRef(uid));
   await setDoc(importDoc, {
     uploadedAt: Date.now(),
+    ...(meta.referenceDate !== undefined
+      ? { referenceDate: meta.referenceDate }
+      : {}),
     fileName,
     patrimonio: meta.patrimonio,
     totalInvestido: meta.totalInvestido,
@@ -189,4 +203,23 @@ export function subscribeTargets(
 
 export async function saveTargets(uid: string, targets: Targets): Promise<void> {
   await setDoc(targetsRef(uid), targets, { merge: true });
+}
+
+export function subscribeRetirement(
+  uid: string,
+  cb: (plan: RetirementPlan | null) => void,
+  onError?: (e: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    retirementRef(uid),
+    (snap) => cb(snap.exists() ? (snap.data() as RetirementPlan) : null),
+    onError,
+  );
+}
+
+export async function saveRetirement(
+  uid: string,
+  plan: RetirementPlan,
+): Promise<void> {
+  await setDoc(retirementRef(uid), plan, { merge: true });
 }

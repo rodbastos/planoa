@@ -10,6 +10,7 @@ import {
   Settings,
   Sun,
   Target,
+  TrendingUp,
   Upload,
   X,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const NAV = [
   { to: "/carteira", label: "Carteira", icon: Briefcase },
   { to: "/importar", label: "Importar", icon: Upload },
   { to: "/carteira-ideal", label: "Carteira Ideal", icon: Target },
+  { to: "/simulacao", label: "Simulação", icon: TrendingUp },
   { to: "/historico", label: "Histórico", icon: History },
   { to: "/configuracoes", label: "Configurações", icon: Settings },
 ];

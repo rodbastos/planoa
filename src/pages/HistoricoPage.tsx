@@ -67,8 +67,10 @@ export function HistoricoPage() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{imp.fileName}</p>
                 <p className="text-xs text-muted-foreground">
-                  {formatTimestamp(imp.uploadedAt)} · {imp.positionCount}{" "}
-                  posições
+                  {imp.referenceDate
+                    ? `dados de ${formatTimestamp(imp.referenceDate)}`
+                    : formatTimestamp(imp.uploadedAt)}{" "}
+                  · {imp.positionCount} posições
                 </p>
               </div>
               <div className="hidden text-right sm:block">

@@ -61,8 +61,9 @@ export function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Atualizado em {formatTimestamp(importMeta.uploadedAt)} ·{" "}
-            {importMeta.fileName}
+            Posição de{" "}
+            {formatTimestamp(importMeta.referenceDate ?? importMeta.uploadedAt)}{" "}
+            · {importMeta.fileName}
           </p>
         </div>
         <Link to="/importar">

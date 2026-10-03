@@ -33,6 +33,7 @@ export function compareWithTargets(
   positions: Position[],
   targets: Record<string, number>,
   key: "assetClass" | "productType",
+  order?: readonly string[],
 ): DeltaRow[] {
   const slices = groupBy(positions, key);
   const total = totalBalance(positions);
@@ -52,6 +53,12 @@ export function compareWithTargets(
       targetBRL,
       deltaBRL: targetBRL - currentBRL,
     });
+  }
+  if (order) {
+    const rank = new Map(order.map((k, i) => [k, i]));
+    return rows.sort(
+      (a, b) => (rank.get(a.key) ?? order.length) - (rank.get(b.key) ?? order.length),
+    );
   }
   return rows.sort((a, b) => Math.abs(b.deltaBRL) - Math.abs(a.deltaBRL));
 }

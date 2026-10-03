@@ -11,7 +11,11 @@ function deaccent(s: string): string {
 /** Normaliza a classe vinda da planilha para a taxonomia do app */
 export function normalizeAssetClass(raw: string): string {
   const n = deaccent(raw);
-  if (n.includes("inflac")) return "Inflação";
+  if (n.includes("inflac") || n.includes("ipca")) {
+    if (n.includes("long")) return "IPCA Longo";
+    if (n.includes("medio") || n.includes("curto")) return "IPCA Médio";
+    return "IPCA";
+  }
   if (n.includes("pos-fixado") || n.includes("pos fixado") || n === "posfixado")
     return "Pós-Fixado CDI";
   if (n.includes("prefixado") || n.includes("pre-fixado")) return "Prefixado";
@@ -24,6 +28,15 @@ export function normalizeAssetClass(raw: string): string {
   return raw.trim() || "Outros";
 }
 
+/** IPCA genérico vira Longo/Médio pelo prazo até o vencimento (> 5 anos → Longo) */
+export function refineIpcaClass(assetClass: string, maturity?: string): string {
+  if (assetClass !== "IPCA") return assetClass;
+  if (!maturity) return "IPCA Longo";
+  const years =
+    (new Date(maturity).getTime() - Date.now()) / (365.25 * 24 * 60 * 60 * 1000);
+  return years > 5 ? "IPCA Longo" : "IPCA Médio";
+}
+
 /** Chave estável do instrumento para regras de classificação */
 export function instrumentKey(p: Pick<Position, "ticker" | "name">): string {
   const base = p.ticker ?? p.name;
@@ -33,6 +46,7 @@ export function instrumentKey(p: Pick<Position, "ticker" | "name">): string {
 const FUND_RV_RE = /\b(FIA|A[CÇ][OÕ]ES|EQUITIES|STOCK)\b/i;
 const FUND_MM_RE = /\b(FIM|MULTIMERCADO|MULTI)\b/i;
 const FUND_PREV_RE = /\b(PREV|PREVID[EÊ]NCIA|PGBL|VGBL|FMP)\b/i;
+const PUBLIC_BOND_RE = /\b(NTN|LFT|LTN|TESOURO)\b/i;
 
 /** Chute inicial de tipo de produto baseado na seção da planilha + nome/ticker */
 export function guessProductType(
@@ -50,7 +64,7 @@ export function guessProductType(
     case "tesourodireto":
       return "Tesouro Direto";
     case "rendafixa":
-      return "Renda Fixa Direta";
+      return PUBLIC_BOND_RE.test(name) ? "Títulos Públicos" : "Títulos Privados";
     case "coe":
       return "COE";
     case "fundosdeinvestimentos":

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import * as XLSX from "xlsx";
 import { parseSpreadsheet } from "../xlsx-parser";
 import { groupBy, totalBalance } from "../allocation";
 
@@ -16,6 +17,29 @@ describe("parser da Posição Detalhada (XP)", () => {
     expect(parsed.saldoDisponivel).toBeCloseTo(615.61, 1);
   });
 
+  it("extrai a data de referência do cabeçalho", () => {
+    // "Conta: 2045900 | 03/10/2026, 05:21"
+    expect(parsed.referenceDate).toBe(new Date(2026, 9, 3, 5, 21).getTime());
+  });
+
+  it("usa a 'Data da Posição Histórica' em planilhas antigas", () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      [
+        " ",
+        null,
+        null,
+        null,
+        null,
+        "Conta: 2045900 | Data da consulta: 03/10/2026 | Data da Posição Histórica: 31/01/2017",
+      ],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const out = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    const p = parseSpreadsheet(new Uint8Array(out));
+    expect(p.referenceDate).toBe(new Date(2017, 0, 31, 12).getTime());
+  });
+
   it("extrai todas as posições", () => {
     // 6 B3 + 6 Tesouro + 15 Renda Fixa + 5 COE + 4 Fundos
     expect(parsed.positions).toHaveLength(36);
@@ -24,7 +48,8 @@ describe("parser da Posição Detalhada (XP)", () => {
   it("normaliza classes de ativo para a taxonomia do app", () => {
     const classes = new Set(parsed.positions.map((p) => p.assetClass));
     expect(classes.has("Pós-Fixado CDI")).toBe(true);
-    expect(classes.has("Inflação")).toBe(true);
+    expect([...classes].some((c) => c === "IPCA Longo" || c === "IPCA Médio")).toBe(true);
+    expect(classes.has("Inflação")).toBe(false);
     expect(classes.has("Prefixado")).toBe(true);
     expect(classes.has("Renda Variável Global")).toBe(true);
     expect(classes.has("Renda Variável Brasil")).toBe(true);
@@ -37,8 +62,14 @@ describe("parser da Posição Detalhada (XP)", () => {
     expect(byName.get("VWRA11")?.productType).toBe("ETF");
     expect(byName.get("CDIB11")?.productType).toBe("ETF");
     expect(byName.get("NTNB PRINC mai/2029")?.productType).toBe("Tesouro Direto");
+    expect(byName.get("NTN-B - AGO/2060")?.productType).toBe(
+      "Títulos Públicos",
+    );
     expect(byName.get("CDB BTG PACTUAL - JUL/2027")?.productType).toBe(
-      "Renda Fixa Direta",
+      "Títulos Privados",
+    );
+    expect(byName.get("DEB PETROBRAS - JAN/2029")?.productType).toBe(
+      "Títulos Privados",
     );
     expect(
       byName.get("XP Bolsa Americana - Taxa Fixa ou Alta Ilimitada - 5y - 29.06.2022")
@@ -73,9 +104,9 @@ describe("parser da Posição Detalhada (XP)", () => {
     );
   });
 
-  it("distribui posições entre as 5 classes", () => {
+  it("distribui posições entre as classes", () => {
     const slices = groupBy(parsed.positions, "assetClass");
-    expect(slices.length).toBe(5);
+    expect(slices.length).toBeGreaterThanOrEqual(5);
     const total = slices.reduce((a, s) => a + s.pct, 0);
     expect(total).toBeCloseTo(1, 5);
   });

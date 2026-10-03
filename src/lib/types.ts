@@ -1,7 +1,8 @@
 export const ASSET_CLASSES = [
-  "Inflação",
   "Pós-Fixado CDI",
   "Prefixado",
+  "IPCA Médio",
+  "IPCA Longo",
   "Renda Variável Global",
   "Renda Variável Brasil",
 ] as const;
@@ -16,7 +17,8 @@ export const PRODUCT_TYPES = [
   "ETF",
   "COE",
   "Ações",
-  "Renda Fixa Direta",
+  "Títulos Públicos",
+  "Títulos Privados",
   "Previdência",
   "Outros",
 ] as const;
@@ -50,6 +52,8 @@ export interface Position {
 export interface ImportMeta {
   id: string;
   uploadedAt: number;
+  /** data de referência do relatório (cabeçalho da planilha), se extraída */
+  referenceDate?: number;
   fileName: string;
   patrimonio: number;
   totalInvestido: number;
@@ -62,6 +66,8 @@ export interface ParsedSpreadsheet {
   totalInvestido: number;
   saldoDisponivel: number;
   saldoProjetado: number;
+  /** data de referência do relatório (ex.: "Conta: 123 | 03/10/2026, 05:21") */
+  referenceDate?: number;
   positions: Position[];
   warnings: string[];
 }
@@ -80,4 +86,16 @@ export interface AllocationSlice {
   key: string;
   balance: number;
   pct: number;
+}
+
+export interface RetirementPlan {
+  /** rentabilidade real esperada, em % ao ano (ex.: 7) */
+  realReturnPct: number;
+  currentAge: number;
+  /** idade em que começam os resgates */
+  retirementAge: number;
+  initialValue: number;
+  monthlyContribution: number;
+  /** renda passiva mensal desejada na fase de resgate */
+  desiredMonthlyIncome: number;
 }

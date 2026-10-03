@@ -51,8 +51,9 @@ export function CarteiraIdealPage() {
 
   const sum = targetsSum(draft);
   const deltas: DeltaRow[] = useMemo(
-    () => compareWithTargets(positions, dirty ? draft : (saved ?? {}), dim),
-    [positions, draft, saved, dim, dirty],
+    () =>
+      compareWithTargets(positions, dirty ? draft : (saved ?? {}), dim, categories),
+    [positions, draft, saved, dim, dirty, categories],
   );
 
   const chartData = deltas.map((d) => ({
@@ -191,14 +192,14 @@ export function CarteiraIdealPage() {
                   <XAxis
                     type="number"
                     tickFormatter={(v) => `${v}%`}
-                    tick={{ fontSize: 11 }}
+                    tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                     stroke={CHART.grid}
                   />
                   <YAxis
                     type="category"
                     dataKey="name"
                     width={140}
-                    tick={{ fontSize: 11 }}
+                    tick={{ fontSize: 11, fill: "var(--foreground)" }}
                     stroke={CHART.grid}
                   />
                   <Tooltip

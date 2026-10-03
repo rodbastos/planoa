@@ -14,6 +14,18 @@ export function formatBRL(value: number | undefined | null): string {
   return brl.format(value);
 }
 
+const brlCompact = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+/** 1500000 -> "R$ 1,5 mi" — para eixos de gráfico */
+export function formatBRLCompact(value: number): string {
+  return brlCompact.format(value);
+}
+
 export function formatPct(fraction: number | undefined | null): string {
   if (fraction === undefined || fraction === null || Number.isNaN(fraction))
     return "—";
@@ -67,6 +79,15 @@ export function parseDateBR(value: unknown): string | undefined {
   const m = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return value.trim() || undefined;
   return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+/** "03/10/2026, 05:21" ou "03/10/2026" -> epoch ms (meio-dia se sem hora) */
+export function parseDateTimeBR(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const m = value.match(/(\d{2})\/(\d{2})\/(\d{4})(?:\D+(\d{2}):(\d{2}))?/);
+  if (!m) return undefined;
+  const d = new Date(+m[3], +m[2] - 1, +m[1], +(m[4] ?? 12), +(m[5] ?? 0));
+  return Number.isNaN(d.getTime()) ? undefined : d.getTime();
 }
 
 export function formatDateISO(iso: string | undefined): string {

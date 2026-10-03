@@ -15,6 +15,13 @@ import { cn } from "../lib/utils";
 
 type GroupBy = "assetClass" | "productType" | "sourceSection";
 
+/** "2029-05-15" -> timestamp; qualquer outro valor conta como sem prazo (vai por último) */
+function maturityKey(p: Position): number {
+  if (!p.maturity) return Infinity;
+  const t = new Date(p.maturity).getTime();
+  return Number.isNaN(t) ? Infinity : t;
+}
+
 const GROUP_LABELS: Record<GroupBy, string> = {
   assetClass: "Classe de ativo",
   productType: "Tipo de produto",
@@ -53,7 +60,9 @@ export function CarteiraPage() {
     return [...map.entries()]
       .map(([key, items]) => ({
         key,
-        items: items.sort((a, b) => b.balance - a.balance),
+        items: items.sort(
+          (a, b) => maturityKey(a) - maturityKey(b) || b.balance - a.balance,
+        ),
         total: items.reduce((a, p) => a + p.balance, 0),
       }))
       .sort((a, b) => b.total - a.total);

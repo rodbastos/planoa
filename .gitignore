@@ -7,3 +7,6 @@ dist
 firebase-debug.log
 .firebaserc.local
 .firebase/
+
+# Test fixture spreadsheets (local only)
+docs/*.xlsx

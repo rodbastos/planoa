@@ -1,7 +1,13 @@
 import * as XLSX from "xlsx";
 import type { ParsedSpreadsheet, Position } from "./types";
-import { parseBRL, parseDateBR, parsePercent, parseQuantity } from "./format";
-import { guessProductType, instrumentKey, normalizeAssetClass } from "./classification";
+import {
+  parseBRL,
+  parseDateBR,
+  parseDateTimeBR,
+  parsePercent,
+  parseQuantity,
+} from "./format";
+import { guessProductType, instrumentKey, normalizeAssetClass, refineIpcaClass } from "./classification";
 
 /** remove acentos, minúsculas, só alfanumérico */
 function norm(s: unknown): string {
@@ -97,6 +103,26 @@ export function parseSpreadsheet(data: ArrayBuffer | Uint8Array): ParsedSpreadsh
   const totals = findTotalsRow(rows);
   const positions: Position[] = [];
   const warnings: string[] = [];
+
+  // data de referência do relatório, no cabeçalho (ex.: "Conta: 2045900 |
+  // 03/10/2026, 05:21"). Em planilhas antigas há "Data da consulta" e
+  // "Data da Posição Histórica" — nesse caso vale a última data da célula.
+  let referenceDate: number | undefined;
+  scan: for (let r = 0; r < Math.min(rows.length, 6); r++) {
+    for (const c of rows[r] ?? []) {
+      if (typeof c !== "string") continue;
+      if (norm(c).includes("posicaohistorica")) {
+        const dates = c.match(/\d{2}\/\d{2}\/\d{4}/g);
+        const t = parseDateTimeBR(dates?.[dates.length - 1]);
+        if (t !== undefined) {
+          referenceDate = t;
+          break scan;
+        }
+      }
+      const t = parseDateTimeBR(c);
+      if (t !== undefined && referenceDate === undefined) referenceDate = t;
+    }
+  }
 
   let currentSection: string | undefined;
   let currentClassRaw: string | undefined;
@@ -224,6 +250,7 @@ export function parseSpreadsheet(data: ArrayBuffer | Uint8Array): ParsedSpreadsh
         warnings.push(`Linha ${r + 1}: "${first}" sem saldo reconhecido`);
       }
 
+      pos.assetClass = refineIpcaClass(pos.assetClass, pos.maturity);
       pos.productType = guessProductType(pos);
       positions.push(pos);
     } else if (first && !currentSection && r > 4) {
@@ -237,5 +264,5 @@ export function parseSpreadsheet(data: ArrayBuffer | Uint8Array): ParsedSpreadsh
   // chave estável por instrumento (para overrides de classificação)
   for (const p of positions) p.instrumentKey = instrumentKey(p);
 
-  return { ...totals, positions, warnings };
+  return { ...totals, referenceDate, positions, warnings };
 }

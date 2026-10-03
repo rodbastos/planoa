@@ -3,11 +3,12 @@ import type { ImportMeta, Position } from "../lib/types";
 import {
   subscribeLatestImport,
   subscribePositions,
+  subscribeRetirement,
   subscribeRules,
   subscribeTargets,
 } from "../lib/firestore";
 import { useAuth } from "./useAuth";
-import type { InstrumentRule, Targets } from "../lib/types";
+import type { InstrumentRule, RetirementPlan, Targets } from "../lib/types";
 
 interface PortfolioState {
   importMeta: ImportMeta | null;
@@ -105,4 +106,27 @@ export function useTargets(): {
   }, [user]);
 
   return { targets, loading };
+}
+
+export function useRetirementPlan(): {
+  plan: RetirementPlan | null;
+  loading: boolean;
+} {
+  const { user } = useAuth();
+  const [plan, setPlan] = useState<RetirementPlan | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeRetirement(
+      user.uid,
+      (p) => {
+        setPlan(p);
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+  }, [user]);
+
+  return { plan, loading };
 }
