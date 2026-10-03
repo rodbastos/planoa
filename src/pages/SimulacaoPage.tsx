@@ -43,6 +43,7 @@ const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
 const DEFAULT_PLAN: RetirementPlan = {
   realReturnPct: 7,
+  inflationPct: 4.5,
   currentAge: 49,
   retirementAge: 64,
   initialValue: 1_500_000,
@@ -114,7 +115,8 @@ export function SimulacaoPage() {
   useEffect(() => {
     if (dirty || loadingPlan || loadingImports || loadingWealth) return;
     if (savedPlan) {
-      setDraft(savedPlan);
+      // merge com defaults: planos salvos antes de novos campos
+      setDraft({ ...DEFAULT_PLAN, ...savedPlan });
     } else {
       setDraft({
         ...DEFAULT_PLAN,
@@ -165,9 +167,9 @@ export function SimulacaoPage() {
   const dynamics = useMemo(
     () =>
       years.length > 0
-        ? dynamicsFromWealth(years)
+        ? dynamicsFromWealth(years, draft.inflationPct)
         : dynamicsFromImports(effectiveImports),
-    [years, effectiveImports],
+    [years, effectiveImports, draft.inflationPct],
   );
 
   const result = useMemo(() => simulateRetirement(draft), [draft]);
@@ -319,6 +321,13 @@ export function SimulacaoPage() {
               onChange={set("realReturnPct")}
             />
             <PlanField
+              label="Inflação esperada"
+              suffix="% a.a."
+              step={0.5}
+              value={draft.inflationPct}
+              onChange={set("inflationPct")}
+            />
+            <PlanField
               label="Sua idade"
               suffix="anos"
               min={0}
@@ -410,7 +419,9 @@ export function SimulacaoPage() {
             title="Patrimônio: trajetória vs planejado"
             subtitle={
               estimate
-                ? `trajetória observada ≈ ${formatPct(estimate.annualRate)} a.a. + ${formatBRL(estimate.monthlyContribution)}/mês`
+                ? estimate.nominalAnnualRate !== undefined
+                  ? `trajetória observada: ${formatPct(estimate.nominalAnnualRate)} nominal → ${formatPct(estimate.annualRate)} real + ${formatBRL(estimate.monthlyContribution)}/mês`
+                  : `trajetória observada ≈ ${formatPct(estimate.annualRate)} a.a. + ${formatBRL(estimate.monthlyContribution)}/mês`
                 : historyPoints.length === 0
                   ? "Envie o CSV anual ou importe planilhas para ver seu histórico"
                   : "Mais um ponto de histórico permite estimar sua trajetória"

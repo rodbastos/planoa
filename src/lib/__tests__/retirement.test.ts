@@ -10,6 +10,7 @@ import type { RetirementPlan } from "../types";
 
 const base: RetirementPlan = {
   realReturnPct: 7,
+  inflationPct: 4.5,
   currentAge: 49,
   retirementAge: 64,
   initialValue: 1_500_000,
@@ -76,6 +77,7 @@ describe("dynamicsFromWealth", () => {
         { year: 2023, flows: 120_000, returnPct: 0.1 },
         { year: 2024, flows: 60_000, returnPct: 0.2 },
       ],
+      0,
       2025,
     );
     // geo mean de 10% e 20% a.a. ≈ 14,89% a.a.
@@ -86,12 +88,25 @@ describe("dynamicsFromWealth", () => {
     expect(dyn.monthlyContribution).toBeCloseTo(180_000 / 24, 6);
   });
 
+  it("deflaciona a rentabilidade nominal para termos reais", () => {
+    const dyn = dynamicsFromWealth(
+      [{ year: 2024, flows: 120_000, returnPct: 0.1 }],
+      4.5,
+      2025,
+    );
+    // 10% nominal / 4,5% inflação ≈ 5,26% real a.a.
+    expect(Math.pow(1 + dyn.monthlyRate, 12)).toBeCloseTo(1.1 / 1.045, 4);
+    // nominal preservado para exibição
+    expect(dyn.nominalMonthlyRate).toBeCloseTo(monthlyRealRate(10), 4);
+  });
+
   it("ignora o ano corrente (parcial)", () => {
     const dyn = dynamicsFromWealth(
       [
         { year: 2024, flows: 120_000, returnPct: 0.1 },
         { year: 2025, flows: 5_000, returnPct: 0.5 },
       ],
+      0,
       2025,
     );
     expect(dyn.monthlyContribution).toBeCloseTo(120_000 / 12, 6);

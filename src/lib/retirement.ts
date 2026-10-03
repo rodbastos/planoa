@@ -76,8 +76,10 @@ export function simulateRetirement(plan: RetirementPlan): RetirementResult {
 export interface HistoryEstimate {
   /** rentabilidade mensal implícita do histórico (aportes já separados) */
   monthlyRate: number;
-  /** taxa anual equivalente, em fração (ex.: 0.12) */
+  /** taxa anual real equivalente, em fração (ex.: 0.12) */
   annualRate: number;
+  /** taxa anual nominal observada, quando vem do CSV (antes de deflacionar) */
+  nominalAnnualRate?: number;
   /** aporte médio mensal estimado (Δ total investido / meses) */
   monthlyContribution: number;
   /** projeção a partir da última importação */
@@ -86,19 +88,22 @@ export interface HistoryEstimate {
 }
 
 export interface TrajectoryDynamics {
-  /** rentabilidade mensal observada (fração) */
+  /** rentabilidade mensal observada, em termos reais (fração) */
   monthlyRate: number;
+  /** taxa nominal mensal antes de deflacionar — só quando vem do CSV */
+  nominalMonthlyRate?: number;
   /** fluxo médio mensal observado (aportes − resgates) */
   monthlyContribution: number;
 }
 
 /**
  * Dinâmica a partir do CSV anual da XP: média geométrica da rentabilidade
- * anual e média dos fluxos (movimentações). O ano corrente é ignorado
- * (dados parciais).
+ * anual (nominal, deflacionada por `inflationPct`) e média dos fluxos
+ * (movimentações). O ano corrente é ignorado (dados parciais).
  */
 export function dynamicsFromWealth(
   years: { year: number; flows: number; returnPct: number }[],
+  inflationPct = 0,
   currentYear = new Date().getFullYear(),
 ): TrajectoryDynamics {
   const complete = years.filter((y) => y.year < currentYear);
@@ -110,8 +115,12 @@ export function dynamicsFromWealth(
     flows += y.flows;
   }
   const months = use.length * 12;
+  const nominalMonthly = Math.pow(prod, 1 / months) - 1;
+  // rentabilidade nominal -> real: (1+nom)/(1+inflação) − 1
+  const monthlyInfl = Math.pow(1 + inflationPct / 100, 1 / 12) - 1;
   return {
-    monthlyRate: Math.pow(prod, 1 / months) - 1,
+    monthlyRate: (1 + nominalMonthly) / (1 + monthlyInfl) - 1,
+    nominalMonthlyRate: nominalMonthly,
     monthlyContribution: flows / months,
   };
 }
@@ -174,6 +183,10 @@ export function simulateEstimated(
   return {
     monthlyRate: dyn.monthlyRate,
     annualRate: Math.pow(1 + dyn.monthlyRate, 12) - 1,
+    nominalAnnualRate:
+      dyn.nominalMonthlyRate !== undefined
+        ? Math.pow(1 + dyn.nominalMonthlyRate, 12) - 1
+        : undefined,
     monthlyContribution: dyn.monthlyContribution,
     points,
     depletionAge,
