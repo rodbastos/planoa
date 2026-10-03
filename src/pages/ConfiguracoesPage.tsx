@@ -1,17 +1,35 @@
-import { useState } from "react";
-import { LogOut, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Copy, KeyRound, LogOut, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../hooks/useAuth";
 import { useRules } from "../hooks/usePortfolio";
-import { deleteRule } from "../lib/firestore";
+import {
+  createMcpToken,
+  deleteMcpToken,
+  deleteRule,
+  subscribeMcpTokens,
+  type McpTokenMeta,
+} from "../lib/firestore";
+import { formatDate } from "../lib/format";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
+
+const MCP_URL = "https://alloca-mcp-1038890628386.us-central1.run.app/mcp";
 
 export function ConfiguracoesPage() {
   const { user, logout } = useAuth();
   const { rules, loading } = useRules();
   const [removing, setRemoving] = useState<string | null>(null);
+  const [tokens, setTokens] = useState<McpTokenMeta[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeMcpTokens(user.uid, setTokens);
+  }, [user]);
 
   const entries = Object.entries(rules).sort(([a], [b]) => a.localeCompare(b));
 
@@ -26,6 +44,37 @@ export function ConfiguracoesPage() {
     } finally {
       setRemoving(null);
     }
+  }
+
+  async function generate() {
+    if (!user) return;
+    setGenerating(true);
+    try {
+      setNewToken(await createMcpToken(user.uid));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao gerar chave");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    if (!user) return;
+    setRevoking(id);
+    try {
+      await deleteMcpToken(user.uid, id);
+      toast.success("Chave revogada");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao revogar chave");
+    } finally {
+      setRevoking(null);
+    }
+  }
+
+  async function copyConnectorUrl() {
+    if (!newToken) return;
+    await navigator.clipboard.writeText(`${MCP_URL}?token=${newToken}`);
+    toast.success("URL do conector copiada");
   }
 
   return (
@@ -94,55 +143,75 @@ export function ConfiguracoesPage() {
       <Card>
         <CardHeader
           title="Acesso via MCP"
-          subtitle="Conecte IAs (Claude, ChatGPT, Cursor…) à sua carteira pelo servidor em mcp/"
+          subtitle="Conecte IAs (Claude, ChatGPT, Cursor…) à sua carteira — cada usuário usa a própria chave"
         />
         <CardContent className="space-y-4 text-sm">
           <div>
-            <p className="mb-1.5 font-medium">Clientes locais (stdio)</p>
-            <p className="mb-2 text-muted-foreground">
-              Registre o servidor na config do cliente — ele sobe
-              automaticamente quando o app de IA abre:
-            </p>
-            <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-xs leading-relaxed">
-{`{
-  "mcpServers": {
-    "alloca": {
-      "command": "npx",
-      "args": ["tsx", "src/index.ts"],
-      "cwd": "<raiz-do-repo>/mcp"
-    }
-  }
-}`}
-            </pre>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="font-medium">Suas chaves</p>
+              <Button size="sm" onClick={generate} disabled={generating}>
+                <KeyRound className="h-4 w-4" />
+                {generating ? "Gerando…" : "Gerar nova chave"}
+              </Button>
+            </div>
+
+            {newToken && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                <p className="mb-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                  Copie agora — a chave não será exibida de novo
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="min-w-0 flex-1 overflow-x-auto rounded bg-muted/50 p-2 font-mono text-xs">
+                    {MCP_URL}?token={newToken}
+                  </code>
+                  <Button size="sm" variant="outline" onClick={copyConnectorUrl}>
+                    <Copy className="h-4 w-4" /> Copiar
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {tokens.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Nenhuma chave. Gere uma para conectar o ChatGPT ou outro
+                cliente remoto.
+              </p>
+            ) : (
+              <div className="divide-y divide-border">
+                {tokens.map((t) => (
+                  <div key={t.id} className="flex items-center gap-3 py-2">
+                    <span className="font-mono text-sm">•••{t.hint}</span>
+                    <span className="flex-1 text-xs text-muted-foreground">
+                      criada em {formatDate(t.createdAt)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={revoking === t.id}
+                      onClick={() => revoke(t.id)}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
-            <p className="mb-1.5 font-medium">ChatGPT (HTTP remoto)</p>
+            <p className="mb-1.5 font-medium">Conectar no ChatGPT</p>
             <p className="mb-2 text-muted-foreground">
-              Suba o servidor em modo HTTP e exponha via túnel ou Cloud Run:
+              No conector MCP do ChatGPT (Developer mode), use a URL abaixo
+              com uma chave sua:
             </p>
             <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-xs leading-relaxed">
-{`cd mcp && npm run start:http        # localhost:8787/mcp
-cloudflared tunnel --url http://localhost:8787`}
+{`${MCP_URL}?token=<sua-chave>`}
             </pre>
-            <p className="mt-2 text-muted-foreground">
-              No conector do ChatGPT, use{" "}
-              <code className="rounded bg-muted/50 px-1 font-mono text-xs">
-                https://&lt;url&gt;/mcp?token=&lt;MCP_AUTH_TOKEN&gt;
-              </code>
-              . Para ficar sempre online sem o PC ligado, faça deploy no
-              Cloud Run — comandos e custos em{" "}
-              <code className="rounded bg-muted/50 px-1 font-mono text-xs">
-                mcp/README.md
-              </code>
-              .
-            </p>
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Tools disponíveis: posições, snapshots, alocação, carteira alvo,
-            rentabilidade, vencimentos, histórico, plano de aposentadoria e
-            simulações — além de escrita (alvo, plano, regras e uploads).
+            A chave identifica você — cada usuário acessa apenas os próprios
+            dados. Revogue uma chave a qualquer momento nesta página.
           </p>
         </CardContent>
       </Card>

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import admin from "firebase-admin";
 import type {
@@ -47,7 +48,7 @@ const BATCH_LIMIT = 450;
 
 let cachedUid: string | undefined;
 
-/** Resolve o uid dono dos dados: ALLOCA_UID, ou ALLOCA_USER_EMAIL → Auth */
+/** Uid admin/local: ALLOCA_UID, ou ALLOCA_USER_EMAIL → Auth */
 export async function getUid(): Promise<string> {
   if (cachedUid) return cachedUid;
   if (env.allocaUid) return (cachedUid = env.allocaUid);
@@ -58,6 +59,30 @@ export async function getUid(): Promise<string> {
   throw new Error(
     "Configure ALLOCA_UID ou ALLOCA_USER_EMAIL no mcp/.env para identificar o usuário.",
   );
+}
+
+/**
+ * Multi-tenant: resolve uma chave de usuário (gerada em Configurações no
+ * app) ao uid dono dela. Chaves vivem em users/{uid}/mcpTokens com o hash
+ * SHA-256 — o token cru nunca é persistido.
+ */
+export async function uidForToken(token: string): Promise<string | null> {
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  try {
+    const snap = await db
+      .collectionGroup("mcpTokens")
+      .where("tokenHash", "==", tokenHash)
+      .limit(1)
+      .get();
+    const d = snap.docs[0];
+    return d ? ((d.data().uid as string) ?? null) : null;
+  } catch {
+    // índice collection-group ainda construindo? fallback: scan direto
+    // (são poucos docs — uma chave por usuário)
+    const snap = await db.collectionGroup("mcpTokens").get();
+    const d = snap.docs.find((d) => d.data().tokenHash === tokenHash);
+    return d ? ((d.data().uid as string) ?? null) : null;
+  }
 }
 
 function userRef(uid: string) {

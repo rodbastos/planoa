@@ -31,9 +31,20 @@ alocação, simulação de aposentadoria e CSV patrimonial.
 | `upload_current_allocation` | novo snapshot: `xlsxBase64` (parser da XP + regras) ou `positions`+`meta` |
 | `upload_annual_csv` | substitui o histórico patrimonial pelo CSV anual da XP |
 
-> **Atenção:** a service account ignora as regras do Firestore — qualquer
-> cliente conectado a este servidor pode ler **e escrever** na carteira.
-> No modo HTTP, defina sempre `MCP_AUTH_TOKEN`.
+> **Atenção:** a service account ignora as regras do Firestore — a chave
+> é a única barreira. Cada usuário acessa apenas os próprios dados.
+
+## Autenticação (multi-tenant)
+
+Cada usuário gera sua **chave MCP** no app, em **Configurações → Acesso
+via MCP**. No Firestore fica apenas o hash SHA-256 em
+`users/{uid}/mcpTokens/` — o servidor resolve `?token=<chave>` → uid e
+todas as tools respondem com os dados daquele usuário. Revogar a chave no
+app bloqueia o acesso na hora.
+
+`MCP_AUTH_TOKEN` (env) é um bypass **admin** opcional que resolve para
+`ALLOCA_UID` — útil para testes; prefira chaves de usuário em produção.
+No modo HTTP, request sem token sempre recebe 401.
 
 ## Setup
 
@@ -124,9 +135,10 @@ gcloud run deploy alloca-mcp \
 
 No ChatGPT (Developer mode → conector MCP):
 
-`https://alloca-mcp-1038890628386.us-central1.run.app/mcp?token=<MCP_AUTH_TOKEN>`
+`https://<url-do-cloud-run>/mcp?token=<MCP_AUTH_TOKEN>`
 
-O token está configurado como env var do serviço — veja/edite em
+A URL do serviço aparece na página **Configurações** do app e no output do
+deploy. O token está configurado como env var do serviço — veja/edite em
 `gcloud run services describe alloca-mcp --region us-central1` ou
 `--update-env-vars MCP_AUTH_TOKEN=novo` para rotacionar.
 
@@ -158,5 +170,5 @@ manter 512Mi sempre alocada custa ~US$ 2–4/mês e não resolve nada aqui.
 | `ALLOCA_USER_EMAIL` | uma das duas | e-mail Google → resolve o uid via Admin Auth |
 | `FIREBASE_PROJECT_ID` | se não vier na SA | default: `VITE_FIREBASE_PROJECT_ID` do `.env` do app |
 | `PORT` | não | porta HTTP (default 8787) |
-| `MCP_AUTH_TOKEN` | recomendado p/ HTTP | bearer token / `?token=` |
+| `MCP_AUTH_TOKEN` | opcional | token admin → `ALLOCA_UID` (bearer ou `?token=`) |
 | `MCP_TRANSPORT` | não | `http` força modo HTTP (mesmo que `--http`) |

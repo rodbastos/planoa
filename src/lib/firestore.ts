@@ -232,3 +232,63 @@ export async function saveWealth(
 ): Promise<void> {
   await setDoc(wealthRef(uid), { years }, { merge: true });
 }
+
+// ---------------------------------------------------------------------------
+// Chaves MCP (acesso de IAs via servidor mcp/)
+// ---------------------------------------------------------------------------
+
+export function mcpTokensRef(uid: string) {
+  return collection(userRef(uid), "mcpTokens");
+}
+
+export interface McpTokenMeta {
+  id: string;
+  /** últimos 6 chars do token, só para identificar na UI */
+  hint: string;
+  createdAt: number;
+}
+
+export function subscribeMcpTokens(
+  uid: string,
+  cb: (tokens: McpTokenMeta[]) => void,
+  onError?: (e: Error) => void,
+): Unsubscribe {
+  const q = query(mcpTokensRef(uid), orderBy("createdAt", "desc"));
+  return onSnapshot(
+    q,
+    (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as McpTokenMeta)),
+    onError,
+  );
+}
+
+/**
+ * Gera uma chave MCP para o usuário. Retorna o token cru — exibir UMA vez;
+ * no Firestore fica apenas o hash SHA-256 (o servidor resolve hash → uid).
+ */
+export async function createMcpToken(uid: string): Promise<string> {
+  const token = Array.from(
+    crypto.getRandomValues(new Uint8Array(32)),
+    (b) => b.toString(16).padStart(2, "0"),
+  ).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(token),
+  );
+  const tokenHash = Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+  await setDoc(doc(mcpTokensRef(uid)), {
+    uid,
+    tokenHash,
+    hint: token.slice(-6),
+    createdAt: Date.now(),
+  });
+  return token;
+}
+
+export async function deleteMcpToken(
+  uid: string,
+  tokenId: string,
+): Promise<void> {
+  await deleteDoc(doc(mcpTokensRef(uid), tokenId));
+}

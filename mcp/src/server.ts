@@ -68,7 +68,11 @@ const metaSummary = (m: ImportMeta) => ({
   positionCount: m.positionCount,
 });
 
-export function createServer(): McpServer {
+export function createServer(boundUid?: string): McpServer {
+  // multi-tenant: quando o request HTTP chega com uma chave de usuário, o
+  // servidor inteiro fica "bound" àquele uid — nenhuma tool escapa dele.
+  // Sem boundUid (stdio), cai no uid admin do .env.
+  const resolveUid = () => boundUid ?? store.getUid();
   const server = new McpServer({ name: "alloca", version: "0.1.0" });
 
   // =========================================================================
@@ -84,7 +88,7 @@ export function createServer(): McpServer {
     },
     async () => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const imports = await store.listImports(uid);
         return ok({ count: imports.length, snapshots: imports.map(metaSummary) });
       } catch (e) {
@@ -102,7 +106,7 @@ export function createServer(): McpServer {
     },
     async ({ importId }) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const meta = await resolveImport(uid, importId);
         const positions = await store.getPositions(uid, meta.id);
         return ok({
@@ -132,7 +136,7 @@ export function createServer(): McpServer {
     },
     async ({ importId, groupBy: dim }) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const meta = await resolveImport(uid, importId);
         const positions = await store.getPositions(uid, meta.id);
         const targets = await store.getTargets(uid);
@@ -173,7 +177,7 @@ export function createServer(): McpServer {
     },
     async () => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const targets = await store.getTargets(uid);
         if (!targets)
           return ok({ targets: null, message: "Carteira alvo ainda não definida." });
@@ -193,7 +197,7 @@ export function createServer(): McpServer {
     },
     async ({ importId }) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const meta = await resolveImport(uid, importId);
         const positions = await store.getPositions(uid, meta.id);
         const imports = await store.listImports(uid);
@@ -245,7 +249,7 @@ export function createServer(): McpServer {
     },
     async ({ importId, withinDays }) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const meta = await resolveImport(uid, importId);
         const positions = await store.getPositions(uid, meta.id);
         const now = Date.now();
@@ -285,7 +289,7 @@ export function createServer(): McpServer {
     },
     async () => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const years = await store.getWealth(uid);
         return ok({ count: years.length, years });
       } catch (e) {
@@ -303,7 +307,7 @@ export function createServer(): McpServer {
     },
     async () => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const plan = await store.getRetirement(uid);
         if (!plan)
           return ok({
@@ -340,7 +344,7 @@ export function createServer(): McpServer {
     },
     async ({ overrides }) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const saved = await store.getRetirement(uid);
         const plan = { ...saved, ...overrides } as RetirementPlan;
         if (!plan.nominalReturnPct || plan.currentAge === undefined)
@@ -427,7 +431,7 @@ export function createServer(): McpServer {
             throw new Error(`${name} deve somar 100% (soma atual: ${sum}).`);
         }
 
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const current = (await store.getTargets(uid)) ?? {
           byAssetClass: {},
           byProductType: {},
@@ -484,7 +488,7 @@ export function createServer(): McpServer {
     },
     async (patch) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const existing = await store.getRetirement(uid);
         const clean = Object.fromEntries(
           Object.entries(patch).filter(([, v]) => v !== undefined),
@@ -558,7 +562,7 @@ export function createServer(): McpServer {
         if (productType && !PRODUCT_TYPES.includes(productType as never))
           warnings.push(`productType "${productType}" fora da taxonomia padrão`);
 
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const meta = await resolveImport(uid, importId);
         const updated = await store.saveRule(
           uid,
@@ -620,7 +624,7 @@ export function createServer(): McpServer {
     },
     async ({ fileName, xlsxBase64, meta, positions }) => {
       try {
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         const rules = await store.getRules(uid);
 
         let m: {
@@ -690,7 +694,7 @@ export function createServer(): McpServer {
           throw new Error(
             "Nenhum ano reconhecido no CSV. Confira o formato (veja docs/ para um exemplo).",
           );
-        const uid = await store.getUid();
+        const uid = await resolveUid();
         await store.saveWealth(uid, years);
         return ok({ saved: true, years: years.length, range: `${years[0].year}–${years[years.length - 1].year}`, data: years });
       } catch (e) {

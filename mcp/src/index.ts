@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "./server";
 import { env } from "./config";
+import { getUid, uidForToken } from "./db";
 
 const useHttp =
   process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http";
@@ -19,12 +20,22 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
   }
 }
 
-function authorized(req: http.IncomingMessage, url: URL): boolean {
-  if (!env.authToken) return true;
+function extractToken(req: http.IncomingMessage, url: URL): string | null {
   const header = req.headers.authorization;
-  if (header === `Bearer ${env.authToken}`) return true;
-  if (url.searchParams.get("token") === env.authToken) return true;
-  return false;
+  if (header?.startsWith("Bearer ")) return header.slice(7);
+  return url.searchParams.get("token");
+}
+
+/**
+ * Resolve o token do request ao uid dono dos dados:
+ * - MCP_AUTH_TOKEN (env) → uid admin (ALLOCA_UID/ALLOCA_USER_EMAIL)
+ * - demais tokens → chave de usuário em users/{uid}/mcpTokens (SHA-256)
+ * Request sem token: sempre 401 (dev local usa stdio, não HTTP).
+ */
+async function resolveRequestUid(token: string | null): Promise<string | null> {
+  if (!token) return null;
+  if (env.authToken && token === env.authToken) return getUid();
+  return uidForToken(token);
 }
 
 async function runHttp() {
@@ -42,14 +53,21 @@ async function runHttp() {
       return;
     }
 
-    if (!authorized(req, url)) {
+    let uid: string | null;
+    try {
+      uid = await resolveRequestUid(extractToken(req, url));
+    } catch (e) {
+      console.error("[alloca-mcp] erro de auth:", e);
+      uid = null;
+    }
+    if (!uid) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
 
     // stateless: um server+transport por request (padrão recomendado do SDK)
-    const server = createServer();
+    const server = createServer(uid);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -73,7 +91,7 @@ async function runHttp() {
   httpServer.listen(env.port, () => {
     console.error(
       `[alloca-mcp] HTTP em http://localhost:${env.port}/mcp` +
-        (env.authToken ? " (auth por token ativa)" : " (SEM auth — defina MCP_AUTH_TOKEN)"),
+        ` (auth: chaves de usuário${env.authToken ? " + token admin" : ""})`,
     );
   });
 }
