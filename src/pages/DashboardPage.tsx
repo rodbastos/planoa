@@ -31,12 +31,13 @@ export function DashboardPage() {
         <img src="/logo-mark.png" alt="" className="mb-6 h-20 w-20" />
         <h1 className="text-2xl font-bold">Bem-vindo ao Plano A</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Importe a planilha "Posição Detalhada" da sua corretora para começar a
-          acompanhar sua carteira.
+          Para começar, importe a planilha "Posição Detalhada" da XP — ou
+          exporte a posição de qualquer corretora e peça para uma IA conectada
+          ao MCP subir os dados para você.
         </p>
         <Link to="/importar" className="mt-6">
           <Button size="lg">
-            <Upload className="h-4 w-4" /> Importar planilha
+            <Upload className="h-4 w-4" /> Importar carteira
           </Button>
         </Link>
       </div>

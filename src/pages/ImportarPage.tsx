@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, Upload } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { AlertTriangle, Bot, CheckCircle2, FileSpreadsheet, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../hooks/useAuth";
 import { useRules } from "../hooks/usePortfolio";
@@ -119,6 +119,29 @@ export function ImportarPage() {
         <p className="mt-1 text-xs text-muted-foreground">
           Formato: "Posição Detalhada" da XP (.xlsx)
         </p>
+      </Card>
+
+      <Card className="flex items-start gap-3 border-accent/30 bg-accent/5 p-4">
+        <Bot className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+        <div className="text-sm">
+          <p className="font-medium">
+            Ou importe por uma IA — de qualquer corretora
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Não é cliente XP? Exporte a posição da sua corretora (planilha,
+            PDF ou até print), envie para um agente de IA conectado ao MCP
+            (gere sua chave em{" "}
+            <Link to="/configuracoes" className="font-medium text-accent underline underline-offset-2">
+              Configurações → Acesso via MCP
+            </Link>
+            ) e peça para subir os dados — ele usa a tool{" "}
+            <code className="rounded bg-muted/50 px-1 font-mono text-xs">
+              upload_current_allocation
+            </code>{" "}
+            com as posições estruturadas e cria um snapshot igual ao da
+            planilha.
+          </p>
+        </div>
       </Card>
 
       {parseError && (

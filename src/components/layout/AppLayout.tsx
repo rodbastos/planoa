@@ -21,10 +21,10 @@ import { useAuth } from "../../hooks/useAuth";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/carteira", label: "Carteira", icon: Briefcase },
-  { to: "/importar", label: "Importar", icon: Upload },
-  { to: "/carteira-ideal", label: "Carteira Ideal", icon: Target },
+  { to: "/carteira", label: "Carteira Atual", icon: Briefcase },
+  { to: "/carteira-ideal", label: "Alocação Alvo", icon: Target },
   { to: "/simulacao", label: "Simulação", icon: TrendingUp },
+  { to: "/importar", label: "Importar", icon: Upload },
   { to: "/historico", label: "Histórico", icon: History },
   { to: "/configuracoes", label: "Configurações", icon: Settings },
 ];
