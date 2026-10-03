@@ -111,6 +111,21 @@ export async function getLatestImport(uid: string): Promise<ImportMeta | null> {
   return d ? ({ id: d.id, ...d.data() } as ImportMeta) : null;
 }
 
+/**
+ * Snapshot "atual": o de maior referenceDate (data extraída do relatório),
+ * não o de upload mais recente — arquivos antigos podem ser importados
+ * depois. Quando não há referenceDate, cai no uploadedAt.
+ */
+export async function getCurrentImport(uid: string): Promise<ImportMeta | null> {
+  const imports = await listImports(uid);
+  if (imports.length === 0) return null;
+  return imports.reduce((best, m) =>
+    (m.referenceDate ?? m.uploadedAt) > (best.referenceDate ?? best.uploadedAt)
+      ? m
+      : best,
+  );
+}
+
 export async function getImport(
   uid: string,
   importId: string,

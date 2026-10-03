@@ -39,13 +39,13 @@ const importIdArg = {
   importId: z
     .string()
     .optional()
-    .describe("ID do snapshot (ver list_snapshots). Omitido = importação mais recente."),
+    .describe("ID do snapshot (ver list_snapshots). Omitido = o de data de referência mais recente."),
 };
 
 async function resolveImport(uid: string, importId?: string) {
   const meta = importId
     ? await store.getImport(uid, importId)
-    : await store.getLatestImport(uid);
+    : await store.getCurrentImport(uid);
   if (!meta)
     throw new Error(
       importId
@@ -91,6 +91,39 @@ export function createServer(boundUid?: string): McpServer {
         const uid = await resolveUid();
         const imports = await store.listImports(uid);
         return ok({ count: imports.length, snapshots: imports.map(metaSummary) });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_portfolio_status",
+    {
+      description:
+        "Status atual da carteira: o snapshot com a data de referência mais recente (extraída do relatório, não a data de upload). Retorna patrimônio, investido, saldo disponível, rentabilidade, número de posições e a alocação resumida por classe de ativo.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const uid = await resolveUid();
+        const meta = await store.getCurrentImport(uid);
+        if (!meta)
+          throw new Error(
+            "Nenhuma importação encontrada. Use upload_current_allocation primeiro.",
+          );
+        const positions = await store.getPositions(uid, meta.id);
+        const gain = meta.patrimonio - meta.totalInvestido;
+        return ok({
+          snapshot: metaSummary(meta),
+          dataReferencia: meta.referenceDate
+            ? new Date(meta.referenceDate).toISOString()
+            : null,
+          gainBRL: gain,
+          returnPct:
+            meta.totalInvestido > 0 ? gain / meta.totalInvestido : null,
+          allocationByAssetClass: groupBy(positions, "assetClass"),
+        });
       } catch (e) {
         return fail(e);
       }

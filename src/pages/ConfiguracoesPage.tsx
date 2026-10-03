@@ -200,10 +200,25 @@ export function ConfiguracoesPage() {
 
           <div>
             <p className="mb-1.5 font-medium">Conectar no ChatGPT</p>
-            <p className="mb-2 text-muted-foreground">
-              No conector MCP do ChatGPT (Developer mode), use a URL abaixo
-              com uma chave sua:
-            </p>
+            <ol className="mb-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+              <li>
+                No ChatGPT: Configurações → Segurança e login → ative o{" "}
+                <strong className="font-medium text-foreground">
+                  Modo de desenvolvedor
+                </strong>
+              </li>
+              <li>
+                Abra <strong className="font-medium text-foreground">Plugins</strong>{" "}
+                e clique no botão <strong className="font-medium text-foreground">+</strong>{" "}
+                para criar a conexão MCP
+              </li>
+              <li>Cole a URL abaixo já com a sua chave gerada acima</li>
+              <li>
+                Selecione{" "}
+                <strong className="font-medium text-foreground">Sem autenticação</strong>{" "}
+                — a chave já vai na própria URL
+              </li>
+            </ol>
             <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-xs leading-relaxed">
 {`${MCP_URL}?token=<sua-chave>`}
             </pre>
