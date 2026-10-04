@@ -18,7 +18,6 @@ import { saveTargets } from "../lib/firestore";
 import {
   compareWithTargets,
   groupBy,
-  REBALANCE_TOLERANCE,
   targetsSum,
   type DeltaRow,
 } from "../lib/allocation";
@@ -245,7 +244,7 @@ export function CarteiraIdealPage() {
         <Card className="overflow-hidden">
           <CardHeader
             title="Rebalanceamento"
-            subtitle="Ação sugerida apenas quando o desvio em relação ao alvo passa de ±20%"
+            subtitle="Ação sugerida quando o desvio passa de ±20% e a diferença supera 0,25% do patrimônio"
           />
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -290,7 +289,7 @@ export function CarteiraIdealPage() {
                     <td
                       className={cn(
                         "px-3 py-2.5 text-right",
-                        Math.abs(d.deviation) > REBALANCE_TOLERANCE
+                        d.needsAction
                           ? d.deviation > 0
                             ? "font-medium text-destructive"
                             : "font-medium text-accent"
@@ -302,8 +301,7 @@ export function CarteiraIdealPage() {
                         : "+∞"}
                     </td>
                     <td className="px-5 py-2.5 text-right">
-                      {Math.abs(d.deviation) <= REBALANCE_TOLERANCE ||
-                      Math.abs(d.deltaBRL) < 1 ? (
+                      {!d.needsAction ? (
                         <span className="text-muted-foreground">ok</span>
                       ) : (
                         <span

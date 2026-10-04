@@ -28,10 +28,15 @@ export interface DeltaRow {
   deltaBRL: number; // positivo = falta alocar (comprar); negativo = excesso
   /** desvio relativo ao alvo: (atual − alvo) / alvo; +0,20 = 20% acima do alvo */
   deviation: number;
+  /** true quando o desvio passa das tolerâncias e vale agir */
+  needsAction: boolean;
 }
 
-/** tolerância de desvio antes de sugerir aporte/resgate (±20%) */
+/** tolerância de desvio relativo ao alvo antes de sugerir aporte/resgate (±20%) */
 export const REBALANCE_TOLERANCE = 0.2;
+
+/** diferença em R$ abaixo desta fração do patrimônio total é residual (0,25%) */
+export const RESIDUAL_TOLERANCE = 0.0025;
 
 /** Compara alocação atual vs carteira ideal */
 export function compareWithTargets(
@@ -50,19 +55,24 @@ export function compareWithTargets(
     const targetPct = (targets[k] ?? 0) / 100;
     const currentBRL = cur?.balance ?? 0;
     const targetBRL = targetPct * total;
+    const deltaBRL = targetBRL - currentBRL;
+    const deviation =
+      targetBRL > 0
+        ? (currentBRL - targetBRL) / targetBRL
+        : currentBRL > 0
+          ? Infinity
+          : 0;
     rows.push({
       key: k,
       currentPct,
       targetPct,
       currentBRL,
       targetBRL,
-      deltaBRL: targetBRL - currentBRL,
-      deviation:
-        targetBRL > 0
-          ? (currentBRL - targetBRL) / targetBRL
-          : currentBRL > 0
-            ? Infinity
-            : 0,
+      deltaBRL,
+      deviation,
+      needsAction:
+        Math.abs(deviation) > REBALANCE_TOLERANCE &&
+        Math.abs(deltaBRL) > Math.max(1, RESIDUAL_TOLERANCE * total),
     });
   }
   if (order) {
