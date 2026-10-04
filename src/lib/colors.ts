@@ -38,6 +38,6 @@ export function categoryColor(key: string): string {
 export const CHART = {
   current: "#258A84",
   target: "#0B2033",
-  planned: "#D97706", // âmbar — contraste com o teal do histórico
+  planned: "#568DB0", // sky — contraste com o teal do histórico
   grid: "rgba(120,140,155,0.25)",
 };

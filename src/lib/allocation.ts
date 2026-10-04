@@ -26,7 +26,12 @@ export interface DeltaRow {
   currentBRL: number;
   targetBRL: number;
   deltaBRL: number; // positivo = falta alocar (comprar); negativo = excesso
+  /** desvio relativo ao alvo: (atual − alvo) / alvo; +0,20 = 20% acima do alvo */
+  deviation: number;
 }
+
+/** tolerância de desvio antes de sugerir aporte/resgate (±20%) */
+export const REBALANCE_TOLERANCE = 0.2;
 
 /** Compara alocação atual vs carteira ideal */
 export function compareWithTargets(
@@ -52,6 +57,12 @@ export function compareWithTargets(
       currentBRL,
       targetBRL,
       deltaBRL: targetBRL - currentBRL,
+      deviation:
+        targetBRL > 0
+          ? (currentBRL - targetBRL) / targetBRL
+          : currentBRL > 0
+            ? Infinity
+            : 0,
     });
   }
   if (order) {
