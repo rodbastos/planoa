@@ -55,7 +55,10 @@ export function DashboardPage() {
 
   const classTargets = targets?.byAssetClass ?? {};
   const deltas = Object.keys(classTargets).length
-    ? compareWithTargets(positions, classTargets, "assetClass").slice(0, 3)
+    ? compareWithTargets(positions, classTargets, "assetClass")
+        .filter((d) => d.needsAction)
+        .sort((a, b) => Math.abs(b.deviation) - Math.abs(a.deviation))
+        .slice(0, 3)
     : [];
 
   return (
