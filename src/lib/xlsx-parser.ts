@@ -72,14 +72,21 @@ function findTotalsRow(rows: Rows): {
   saldoProjetado: number;
 } {
   for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (row.some((c) => norm(c).includes("patrimonio"))) {
+    const labels = rows[i];
+    if (labels.some((c) => norm(c).includes("patrimonio"))) {
       const vals = rows[i + 1] ?? [];
+      // localiza a coluna pelo rótulo; fallback na posição do layout XP
+      const col = (label: string, fallback: number) => {
+        const idx = labels.findIndex((c) => norm(c).includes(label));
+        return idx >= 0 ? idx : fallback;
+      };
+      // "Disponível" vem da célula "Saldo projetado" (inclui liquidações pendentes)
+      const projetado = col("saldoprojetado", col("saldodisponivel", 3));
       return {
-        patrimonio: parseBRL(vals[0]) ?? 0,
-        totalInvestido: parseBRL(vals[1]) ?? 0,
-        saldoDisponivel: parseBRL(vals[2]) ?? 0,
-        saldoProjetado: parseBRL(vals[3]) ?? 0,
+        patrimonio: parseBRL(vals[col("patrimonio", 0)]) ?? 0,
+        totalInvestido: parseBRL(vals[col("totalinvestido", 1)]) ?? 0,
+        saldoDisponivel: parseBRL(vals[projetado]) ?? 0,
+        saldoProjetado: parseBRL(vals[projetado]) ?? 0,
       };
     }
   }
