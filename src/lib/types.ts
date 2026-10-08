@@ -77,6 +77,8 @@ export interface InstrumentRule {
   productType?: string;
 }
 
+export type AssetIntent = "keep" | "exit";
+
 export interface Targets {
   byAssetClass: Record<string, number>;
   byProductType: Record<string, number>;

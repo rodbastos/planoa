@@ -141,9 +141,9 @@ export function DashboardPage() {
             title="Maiores desvios da carteira ideal"
             subtitle="Diferença entre alocação atual e alvo por classe"
             action={
-              <Link to="/carteira-ideal">
+              <Link to="/rebalanceamento">
                 <Button variant="ghost" size="sm">
-                  Ver detalhes <ArrowRight className="h-4 w-4" />
+                  Simular ajustes <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
             }

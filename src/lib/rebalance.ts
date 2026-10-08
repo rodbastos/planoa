@@ -1,0 +1,316 @@
+import { REBALANCE_TOLERANCE, RESIDUAL_TOLERANCE } from "./allocation";
+import { instrumentKey } from "./classification";
+import type { AssetIntent, Position } from "./types";
+
+export type RebalanceMode = "contribution" | "full";
+export type RebalanceDimension = "asset" | "assetClass" | "productType";
+
+export interface RebalanceAsset {
+  key: string;
+  name: string;
+  ticker?: string;
+  maturity?: string;
+  assetClass: string;
+  productType: string;
+  originalBalance: number;
+  balance: number;
+  future: boolean;
+  preferenceKey?: string;
+  intent?: AssetIntent;
+  allowExitSale?: boolean;
+  targetPct: number;
+  classSharePct: number;
+  productSharePct: number;
+}
+
+export interface AssetRebalanceInput {
+  assets: RebalanceAsset[];
+  dimension: RebalanceDimension;
+  targets: Record<string, number>;
+  contribution: number;
+  mode: RebalanceMode;
+  manualContributions?: Record<string, number>;
+  manualDimension?: RebalanceDimension;
+}
+
+export function validAllocation(values: number[]): boolean {
+  return values.length > 0 && values.every((value) => Number.isFinite(value) && value >= 0 && value <= 100) &&
+    Math.abs(values.reduce((sum, value) => sum + value, 0) - 100) <= 0.05;
+}
+
+export interface RebalanceCategory {
+  key: string;
+  balance: number;
+  targetPct: number;
+}
+
+export interface RebalanceInput {
+  categories: RebalanceCategory[];
+  contribution: number;
+  mode: RebalanceMode;
+  manualContributions?: Record<string, number>;
+}
+
+export interface RebalanceRow {
+  key: string;
+  currentBRL: number;
+  currentPct: number;
+  targetPct: number;
+  targetBRL: number;
+  tradeBRL: number;
+  afterBRL: number;
+  afterPct: number;
+  needsAction: boolean;
+  afterNeedsAction: boolean;
+}
+
+export interface RebalanceResult {
+  rows: RebalanceRow[];
+  totalBefore: number;
+  totalAfter: number;
+  purchases: number;
+  sales: number;
+  remainingCash: number;
+  minimumContribution: number | null;
+  distanceBefore: number;
+  distanceAfter: number;
+}
+
+function toCents(value: number): number {
+  const cents = Math.round((value + Number.EPSILON) * 100);
+  if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(cents)) {
+    throw new Error("Informe valores monetários válidos, não negativos e dentro do limite de precisão.");
+  }
+  return cents;
+}
+
+function splitCents(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((acc, value) => acc + value, 0);
+  if (total === 0 || sum === 0) return weights.map(() => 0);
+  const exact = weights.map((weight) => (weight / sum) * total);
+  const amounts = exact.map(Math.floor);
+  const remainder = total - amounts.reduce((acc, value) => acc + value, 0);
+  const ranked = exact.map((value, index) => ({ index, fraction: value - amounts[index] }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let i = 0; i < remainder; i++) amounts[ranked[i].index]++;
+  return amounts;
+}
+
+function needsAction(balance: number, total: number, weight: number): boolean {
+  const target = total * weight;
+  const difference = Math.abs(balance - target);
+  return difference > Math.max(100, total * RESIDUAL_TOLERANCE) &&
+    (target === 0 || difference / target > REBALANCE_TOLERANCE);
+}
+
+export function simulateRebalance({
+  categories,
+  contribution,
+  mode,
+  manualContributions,
+}: RebalanceInput): RebalanceResult {
+  const targetSum = categories.reduce((sum, row) => sum + row.targetPct, 0);
+  if (!validAllocation(categories.map((row) => row.targetPct))) {
+    throw new Error("As metas devem estar entre 0% e 100% e somar 100%.");
+  }
+  const keys = new Set(categories.map((row) => row.key));
+  if (keys.size !== categories.length) throw new Error("Há uma categoria duplicada no cenário.");
+  const balances = categories.map((row) => toCents(row.balance));
+  const weights = categories.map((row) => row.targetPct / targetSum);
+  const budget = toCents(contribution);
+  const total = balances.reduce((sum, value) => sum + value, 0);
+  const finalTotal = total + budget;
+  if (!Number.isSafeInteger(finalTotal)) throw new Error("O total excede o limite de precisão monetária.");
+  const targets = splitCents(finalTotal, weights);
+  let trades: number[];
+  if (mode === "full") {
+    trades = targets.map((target, i) => target - balances[i]);
+  } else if (manualContributions) {
+    if (Object.keys(manualContributions).some((key) => !keys.has(key))) {
+      throw new Error("O aporte manual contém uma categoria desconhecida.");
+    }
+    trades = categories.map((row) => toCents(manualContributions[row.key] ?? 0));
+    if (trades.reduce((sum, value) => sum + value, 0) > budget) {
+      throw new Error("Os aportes manuais excedem o orçamento disponível. Reduza os valores ou aumente o aporte.");
+    }
+  } else {
+    trades = splitCents(budget, targets.map((target, i) => Math.max(0, target - balances[i])));
+  }
+
+  const remainingCash = budget - trades.reduce((sum, value) => sum + value, 0);
+  const rows = categories.map((category, i): RebalanceRow => {
+    const after = balances[i] + trades[i];
+    return {
+      key: category.key,
+      currentBRL: balances[i] / 100,
+      currentPct: total > 0 ? balances[i] / total : 0,
+      targetPct: weights[i],
+      targetBRL: targets[i] / 100,
+      tradeBRL: trades[i] / 100,
+      afterBRL: after / 100,
+      afterPct: finalTotal > 0 ? after / finalTotal : 0,
+      needsAction: needsAction(balances[i], total, weights[i]),
+      afterNeedsAction: needsAction(after, finalTotal, weights[i]),
+    };
+  });
+  const impossibleWithoutSales = balances.some((balance, i) => balance > 0 && weights[i] === 0);
+  const requiredTotal = Math.max(total, ...balances.map((balance, i) => weights[i] > 0 ? balance / weights[i] : 0));
+  const minimumContribution = impossibleWithoutSales ? null : Math.ceil(Math.max(0, requiredTotal - total)) / 100;
+
+  return {
+    rows,
+    totalBefore: total / 100,
+    totalAfter: finalTotal / 100,
+    purchases: trades.reduce((sum, value) => sum + Math.max(0, value), 0) / 100,
+    sales: trades.reduce((sum, value) => sum + Math.max(0, -value), 0) / 100,
+    remainingCash: remainingCash / 100,
+    minimumContribution,
+    distanceBefore: total > 0 ? rows.reduce((sum, row) => sum + Math.abs(row.currentPct - row.targetPct), 0) / 2 : 0,
+    distanceAfter: finalTotal > 0 ? (rows.reduce((sum, row) => sum + Math.abs(row.afterPct - row.targetPct), 0) + remainingCash / finalTotal) / 2 : 0,
+  };
+}
+
+export function rebalancePreferenceKey(position: Pick<Position, "name" | "ticker" | "instrumentKey" | "maturity">): string {
+  return JSON.stringify([position.instrumentKey ?? instrumentKey(position), position.maturity ?? ""]);
+}
+
+export function createRebalanceAssets(positions: Position[], classTargets: Record<string, number>): RebalanceAsset[] {
+  const assets = positions.map((position, index): RebalanceAsset => ({
+    key: position.id ? `existing:id:${position.id}` : `existing:row:${index}`,
+    preferenceKey: rebalancePreferenceKey(position),
+    name: position.name,
+    ticker: position.ticker,
+    maturity: position.maturity,
+    assetClass: position.assetClass || "Outros",
+    productType: position.productType || "Outros",
+    originalBalance: position.balance,
+    balance: position.balance,
+    future: false,
+    targetPct: 0,
+    classSharePct: 0,
+    productSharePct: 0,
+  }));
+  for (const dimension of ["assetClass", "productType"] as const) {
+    for (const key of new Set(assets.map((asset) => asset[dimension]))) {
+      const members = assets.filter((asset) => asset[dimension] === key);
+      const balances = members.map((asset) => Number.isFinite(asset.balance) ? Math.max(0, asset.balance) : 0);
+      const shares = splitCents(10000, balances.some((value) => value > 0) ? balances : members.map(() => 1));
+      members.forEach((asset, index) => {
+        if (dimension === "assetClass") {
+          asset.classSharePct = shares[index] / 100;
+          asset.targetPct = (classTargets[key] ?? 0) * shares[index] / 10000;
+        } else {
+          asset.productSharePct = shares[index] / 100;
+        }
+      });
+    }
+  }
+  return assets;
+}
+
+function groupShares(assets: RebalanceAsset[], dimension: "assetClass" | "productType", key: string): number[] {
+  if (!assets.length) throw new Error(`Adicione um ativo existente ou futuro para a categoria ${key}, ou revise sua meta.`);
+  const shares = assets.map((asset) => dimension === "assetClass" ? asset.classSharePct : asset.productSharePct);
+  if (!validAllocation(shares)) throw new Error(`Os pesos dos ativos em ${key} devem estar entre 0% e 100% e somar 100%.`);
+  const eligible = shares.map((share, i) => assets[i].intent === "exit" ? 0 : share);
+  if (!eligible.some((share) => share > 0)) throw new Error(`A categoria ${key} não tem ativo elegível para receber recursos. Inclua um ativo, revise os pesos ou a meta da categoria.`);
+  return eligible;
+}
+
+export function assetTargetCategories(
+  assets: RebalanceAsset[], dimension: RebalanceDimension, targets: Record<string, number>,
+): RebalanceCategory[] {
+  if (dimension === "asset") {
+    if (!validAllocation(assets.map((asset) => asset.targetPct))) throw new Error("As metas base dos ativos devem estar entre 0% e 100% e somar 100%.");
+    const eligibleSum = assets.reduce((sum, asset) => sum + (asset.intent === "exit" ? 0 : asset.targetPct), 0);
+    if (eligibleSum === 0) throw new Error("Não há ativo elegível para receber recursos. Defina uma meta para um ativo que deseja manter ou adicione um ativo futuro.");
+    return assets.map((asset) => ({ key: asset.key, balance: asset.balance,
+      targetPct: asset.intent === "exit" ? 0 : asset.targetPct / eligibleSum * 100 }));
+  }
+  if (!validAllocation(Object.values(targets))) throw new Error("As metas das categorias devem estar entre 0% e 100% e somar 100%.");
+  const percentages = new Map<string, number>();
+  for (const [key, target] of Object.entries(targets)) {
+    if (target === 0) continue;
+    const members = assets.filter((asset) => asset[dimension] === key);
+    const shares = groupShares(members, dimension, key);
+    const sum = shares.reduce((acc, value) => acc + value, 0);
+    members.forEach((asset, i) => percentages.set(asset.key, target * shares[i] / sum));
+  }
+  return assets.map((asset) => ({ key: asset.key, balance: asset.balance, targetPct: percentages.get(asset.key) ?? 0 }));
+}
+
+export function simulateAssetRebalance({
+  assets, dimension, targets, contribution, mode, manualContributions, manualDimension = dimension,
+}: AssetRebalanceInput): RebalanceResult {
+  if (assets.some((asset) => asset.future && (asset.balance !== 0 || asset.originalBalance !== 0))) {
+    throw new Error("Ativos futuros devem ter saldo inicial zero. Use aportes ou resgates para financiá-los.");
+  }
+  const categories = assetTargetCategories(assets, dimension, targets);
+  let manual = manualContributions;
+  if (mode === "contribution" && manual && manualDimension !== "asset") {
+    const entries: [string, number][] = [];
+    for (const [key, value] of Object.entries(manual)) {
+      const amount = toCents(value);
+      if (amount === 0) continue;
+      const members = assets.filter((asset) => asset[manualDimension] === key);
+      const amounts = splitCents(amount, groupShares(members, manualDimension, key));
+      members.forEach((asset, i) => entries.push([asset.key, amounts[i] / 100]));
+    }
+    manual = Object.fromEntries(entries);
+  }
+  if (mode === "contribution" && manual && assets.some((asset) => asset.intent === "exit" && (manual[asset.key] ?? 0) > 0)) {
+    throw new Error("Um ativo marcado para saída não pode receber aportes. Remova o aporte ou altere a intenção para Manter.");
+  }
+  const ideal = simulateRebalance({ categories, contribution, mode, manualContributions: manual });
+  const locked = new Set(assets.filter((asset) => asset.intent === "exit" && !asset.allowExitSale).map((asset) => asset.key));
+  if (mode !== "full" || locked.size === 0) return ideal;
+  const available = simulateRebalance({ categories: categories.filter((row) => !locked.has(row.key)), contribution, mode });
+  const trades = new Map(available.rows.map((row) => [row.key, row.tradeBRL]));
+  const rows = ideal.rows.map((row) => {
+    const tradeBRL = trades.get(row.key) ?? 0;
+    const afterCents = toCents(row.currentBRL) + Math.round(tradeBRL * 100);
+    return { ...row, tradeBRL, afterBRL: afterCents / 100,
+      afterPct: ideal.totalAfter > 0 ? afterCents / toCents(ideal.totalAfter) : 0,
+      afterNeedsAction: needsAction(afterCents, toCents(ideal.totalAfter), row.targetPct) };
+  });
+  return { ...ideal, rows, purchases: available.purchases, sales: available.sales,
+    distanceAfter: ideal.totalAfter > 0 ? rows.reduce((sum, row) => sum + Math.abs(row.afterPct - row.targetPct), 0) / 2 : 0 };
+}
+
+export interface RebalanceSummary {
+  key: string;
+  label: string;
+  currentBRL: number;
+  targetBRL: number;
+  afterBRL: number;
+  targetPct: number;
+  purchases: number;
+  sales: number;
+}
+
+export function summarizeRebalance(
+  result: RebalanceResult, assets: RebalanceAsset[], dimension: RebalanceDimension,
+): RebalanceSummary[] {
+  const byKey = new Map(assets.map((asset) => [asset.key, asset]));
+  const groups = new Map<string, RebalanceSummary>();
+  for (const row of result.rows) {
+    const asset = byKey.get(row.key);
+    if (!asset) throw new Error("Ativo não encontrado no cenário.");
+    const key = dimension === "asset" ? asset.key : asset[dimension];
+    const group = groups.get(key) ?? {
+      key, label: dimension === "asset" ? asset.name : key,
+      currentBRL: 0, targetBRL: 0, afterBRL: 0, targetPct: 0, purchases: 0, sales: 0,
+    };
+    group.currentBRL += toCents(row.currentBRL);
+    group.targetBRL += toCents(row.targetBRL);
+    group.afterBRL += toCents(row.afterBRL);
+    group.targetPct += row.targetPct;
+    group.purchases += toCents(Math.max(0, row.tradeBRL));
+    group.sales += toCents(Math.max(0, -row.tradeBRL));
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => ({
+    ...group, currentBRL: group.currentBRL / 100, targetBRL: group.targetBRL / 100,
+    afterBRL: group.afterBRL / 100, purchases: group.purchases / 100, sales: group.sales / 100,
+  }));
+}

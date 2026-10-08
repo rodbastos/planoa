@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type {
+  AssetIntent,
   ImportMeta,
   InstrumentRule,
   Position,
@@ -36,6 +37,30 @@ export function positionsRef(uid: string, importId: string) {
 
 export function rulesRef(uid: string) {
   return collection(userRef(uid), "instrumentRules");
+}
+
+export function subscribeRebalancePreferences(
+  uid: string,
+  cb: (preferences: Record<string, AssetIntent>) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(collection(userRef(uid), "rebalancePreferences"), (snap) => {
+    const entries: [string, AssetIntent][] = [];
+    for (const document of snap.docs) {
+      const data = document.data();
+      if (typeof data.key !== "string" || (data.intent !== "keep" && data.intent !== "exit")) {
+        onError(new Error("Uma preferência de rebalanceamento é inválida. Não foi possível aplicar suas intenções com segurança."));
+        return;
+      }
+      entries.push([data.key, data.intent]);
+    }
+    cb(Object.fromEntries(entries));
+  }, onError);
+}
+
+export async function saveRebalancePreference(uid: string, key: string, intent: AssetIntent): Promise<void> {
+  if (!uid || !key || (intent !== "keep" && intent !== "exit")) throw new Error("Preferência de rebalanceamento inválida.");
+  await setDoc(doc(collection(userRef(uid), "rebalancePreferences"), encodeURIComponent(key)), { key, intent }, { merge: true });
 }
 
 export function targetsRef(uid: string) {

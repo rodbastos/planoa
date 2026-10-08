@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { ImportMeta, Position } from "../lib/types";
 import {
   subscribePositions,
+  subscribeRebalancePreferences,
+  saveRebalancePreference,
   subscribeRetirement,
   subscribeRules,
   subscribeTargets,
@@ -10,6 +12,7 @@ import {
 import { useAuth } from "./useAuth";
 import { useImports } from "./useImports";
 import type {
+  AssetIntent,
   InstrumentRule,
   RetirementPlan,
   Targets,
@@ -105,6 +108,40 @@ export function useTargets(): {
   }, [user]);
 
   return { targets, loading };
+}
+
+export function useRebalancePreferences() {
+  const { user } = useAuth();
+  const uid = user?.uid;
+  const [state, setState] = useState<{
+    uid?: string;
+    preferences: Record<string, AssetIntent>;
+    loading: boolean;
+    error: string | null;
+  }>({ preferences: {}, loading: true, error: null });
+
+  useEffect(() => {
+    setState({ uid, preferences: {}, loading: !!uid, error: null });
+    if (!uid) return;
+    return subscribeRebalancePreferences(uid, (preferences) => {
+      setState((current) => current.uid === uid ? { uid, preferences, loading: false, error: null } : current);
+    }, (error) => {
+      setState((current) => current.uid === uid ? { ...current, error: error.message, loading: false } : current);
+    });
+  }, [uid]);
+
+  async function saveIntent(key: string, intent: AssetIntent) {
+    if (!uid) throw new Error("Entre na sua conta para salvar a intenção do ativo.");
+    await saveRebalancePreference(uid, key, intent);
+    setState((current) => current.uid === uid ? { ...current, preferences: { ...current.preferences, [key]: intent } } : current);
+  }
+
+  return {
+    preferences: state.uid === uid ? state.preferences : {},
+    loading: state.uid !== uid || state.loading,
+    error: state.uid === uid ? state.error : null,
+    saveIntent,
+  };
 }
 
 export function useRetirementPlan(): {

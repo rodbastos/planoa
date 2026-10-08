@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ArrowRight, Save } from "lucide-react";
 import { toast } from "sonner";
 import {
   Bar,
@@ -245,6 +246,11 @@ export function CarteiraIdealPage() {
           <CardHeader
             title="Rebalanceamento"
             subtitle="Ação sugerida quando o desvio passa de ±20% e a diferença supera 0,25% do patrimônio"
+            action={
+              <Link to={dim === "productType" ? "/rebalanceamento?visao=produtos" : "/rebalanceamento?visao=classes"} className="flex items-center gap-2 text-xs font-semibold text-accent hover:underline">
+                Simular ajustes <ArrowRight className="h-4 w-4" />
+              </Link>
+            }
           />
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
