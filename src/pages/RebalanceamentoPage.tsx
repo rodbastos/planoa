@@ -344,7 +344,9 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
         </CardContent>
       </Card>}
       {(validationError || actionError) && <div role="alert" className="rounded-xl border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive">{actionError ?? validationError}</div>}
-      {result && !savingIntent && !failedIntent && <RebalanceResults result={result} assets={assets} mode={mode} contribution={contribution} onUseMinimum={(value) => { setContribution(value); setManualMode(false); }} />}
+      {result && !savingIntent && !failedIntent && <RebalanceResults result={result} assets={assets} mode={mode} contribution={contribution}
+        groupTargets={{ assetClass: classTargets, productType: productTargets }}
+        onUseMinimum={(value) => { setContribution(value); setManualMode(false); }} />}
       <div className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground"><CircleHelp className="mt-0.5 h-4 w-4 shrink-0" /><p>Simulação em valores brutos, sem executar ordens ou salvar ativos futuros. Não considera impostos, taxas, liquidez, carências, preços em tempo real ou lotes mínimos. Revise essas condições antes de investir. Trocar a importação, sair da página ou reiniciar descarta o cenário, mas preserva as intenções de manter ou sair salvas na conta.</p></div>
     </>
   );
@@ -392,17 +394,22 @@ function FutureAssetForm({ assets, classOptions, productOptions, onAdd, onCancel
   </form>;
 }
 
-function RebalanceResults({ result, assets, mode, contribution, onUseMinimum }: {
+function RebalanceResults({ result, assets, mode, contribution, groupTargets, onUseMinimum }: {
   result: RebalanceResult;
   assets: RebalanceAsset[];
   mode: RebalanceMode;
   contribution: number;
+  groupTargets: { assetClass: Record<string, number>; productType: Record<string, number> };
   onUseMinimum: (value: number) => void;
 }) {
   const [view, setView] = useState<RebalanceDimension>("assetClass");
   const byKey = new Map(assets.map((asset) => [asset.key, asset]));
   const activeRows = result.rows.filter((row) => row.currentBRL > 0 || row.targetPct > 0 || row.afterBRL > 0 || byKey.get(row.key)?.future);
-  const summary = summarizeRebalance(result, assets, view).filter((row) => row.currentBRL > 0 || row.targetPct > 0 || row.afterBRL > 0);
+  const summary = summarizeRebalance(result, assets, view)
+    .filter((row) => row.currentBRL > 0 || row.targetPct > 0 || row.afterBRL > 0 || (view !== "asset" && (groupTargets[view][row.key] ?? 0) > 0))
+    .map((row) => view === "asset" || groupTargets[view][row.key] === undefined
+      ? row
+      : { ...row, targetPct: groupTargets[view][row.key] / 100 });
   const chartData = summary.map((row) => ({ name: row.label,
     Antes: result.totalBefore > 0 ? row.currentBRL / result.totalBefore * 100 : 0,
     Depois: result.totalAfter > 0 ? row.afterBRL / result.totalAfter * 100 : 0, Alvo: row.targetPct * 100 }));
@@ -439,7 +446,7 @@ function RebalanceResults({ result, assets, mode, contribution, onUseMinimum }: 
 
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
       <Card className="min-w-0">
-        <CardHeader title="Antes, depois e alvo" subtitle="Agrupe os mesmos resultados sem alterar o cenário ou as metas." />
+        <CardHeader title="Antes, depois e alvo" subtitle="Agrupa os resultados sem alterar o cenário. O alvo é a meta definida para cada agrupamento (por ativo, a meta efetiva do cenário)." />
         <CardContent className="space-y-4">
           <div className="overflow-x-auto"><Tabs tabs={DIMENSIONS} active={view} onChange={(value) => setView(value as RebalanceDimension)} /></div>
           <div className="max-h-[32rem] overflow-y-auto">
