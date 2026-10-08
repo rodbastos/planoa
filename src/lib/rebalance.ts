@@ -134,7 +134,11 @@ export function simulateRebalance({
       throw new Error("Os aportes manuais excedem o orçamento disponível. Reduza os valores ou aumente o aporte.");
     }
   } else {
-    trades = splitCents(budget, targets.map((target, i) => Math.max(0, target - balances[i])));
+    const gaps = targets.map((target, i) => Math.max(0, target - balances[i]));
+    const flagged = targets.map((_, i) => needsAction(balances[i], total, weights[i]));
+    let distribution = gaps.map((gap, i) => (flagged[i] ? gap : 0));
+    if (!distribution.some((value) => value > 0)) distribution = flagged.some(Boolean) ? gaps : weights;
+    trades = splitCents(budget, distribution);
   }
 
   const remainingCash = budget - trades.reduce((sum, value) => sum + value, 0);
@@ -313,4 +317,52 @@ export function summarizeRebalance(
     ...group, currentBRL: group.currentBRL / 100, targetBRL: group.targetBRL / 100,
     afterBRL: group.afterBRL / 100, purchases: group.purchases / 100, sales: group.sales / 100,
   }));
+}
+
+export interface GroupedMetrics {
+  distanceBefore: number;
+  distanceAfter: number;
+  before: number;
+  after: number;
+}
+
+export function summarizeMetrics(
+  result: RebalanceResult,
+  assets: RebalanceAsset[],
+  dimension: RebalanceDimension,
+  groupTargets?: Record<string, number>,
+): GroupedMetrics {
+  const byKey = new Map(assets.map((asset) => [asset.key, asset]));
+  const groups = new Map<string, { current: number; after: number; impliedTarget: number }>();
+  for (const row of result.rows) {
+    const asset = byKey.get(row.key);
+    if (!asset) throw new Error("Ativo não encontrado no cenário.");
+    const key = dimension === "asset" ? asset.key : asset[dimension];
+    const group = groups.get(key) ?? { current: 0, after: 0, impliedTarget: 0 };
+    group.current += toCents(row.currentBRL);
+    group.after += toCents(row.afterBRL);
+    group.impliedTarget += row.targetPct;
+    groups.set(key, group);
+  }
+  if (dimension !== "asset" && groupTargets) {
+    for (const [key, target] of Object.entries(groupTargets)) {
+      if (target > 0 && !groups.has(key)) groups.set(key, { current: 0, after: 0, impliedTarget: 0 });
+    }
+  }
+  const totalBefore = toCents(result.totalBefore);
+  const totalAfter = toCents(result.totalAfter);
+  const metrics: GroupedMetrics = { distanceBefore: 0, distanceAfter: 0, before: 0, after: 0 };
+  for (const [key, group] of groups) {
+    const weight = dimension !== "asset" && groupTargets?.[key] !== undefined
+      ? groupTargets[key] / 100
+      : group.impliedTarget;
+    if (totalBefore > 0) metrics.distanceBefore += Math.abs(group.current / totalBefore - weight);
+    if (totalAfter > 0) metrics.distanceAfter += Math.abs(group.after / totalAfter - weight);
+    if (needsAction(group.current, totalBefore, weight)) metrics.before += 1;
+    if (needsAction(group.after, totalAfter, weight)) metrics.after += 1;
+  }
+  if (totalAfter > 0) metrics.distanceAfter += toCents(result.remainingCash) / totalAfter;
+  metrics.distanceBefore /= 2;
+  metrics.distanceAfter /= 2;
+  return metrics;
 }

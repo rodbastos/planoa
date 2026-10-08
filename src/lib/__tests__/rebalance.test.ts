@@ -4,6 +4,7 @@ import {
   rebalancePreferenceKey,
   simulateAssetRebalance,
   simulateRebalance,
+  summarizeMetrics,
   summarizeRebalance,
   type RebalanceAsset,
   type RebalanceInput,
@@ -141,6 +142,30 @@ describe("rebalanceamento por ativo", () => {
     expect(summary[0].sales).toBe(1000);
     expect(summary[0].afterBRL).toBe(8000);
     expect(summary.reduce((sum, row) => sum + cents(row.afterBRL), 0)).toBe(cents(result.totalAfter));
+  });
+
+  it("resume distância e alertas no agrupamento selecionado, cancelando desvios internos", () => {
+    const rows = assets();
+    rows[0].balance = 2000;
+    rows[1].balance = 6000;
+    const result = simulateAssetRebalance({ assets: rows, dimension: "asset", targets: {}, contribution: 0, mode: "contribution" });
+    const byAsset = summarizeMetrics(result, rows, "asset");
+    const byClass = summarizeMetrics(result, rows, "assetClass", groupTargets);
+    expect(byAsset.distanceBefore).toBeCloseTo(0.475);
+    expect(byClass.distanceBefore).toBeCloseTo(0.3);
+    expect(byAsset.distanceAfter).toBeCloseTo(0.475);
+    expect(byClass.distanceAfter).toBeCloseTo(0.3);
+    expect(byAsset.before).toBe(3);
+    expect(byClass.before).toBe(2);
+  });
+
+  it("conta no agrupamento as categorias com meta configurada e sem ativos", () => {
+    const result = simulateAssetRebalance({ assets: assets(), dimension: "assetClass", targets: groupTargets, contribution: 0, mode: "full" });
+    const metrics = summarizeMetrics(result, assets(), "productType", { CDB: 60, "Ações": 30, ETF: 10 });
+    expect(metrics.distanceBefore).toBeCloseTo(0.2);
+    expect(metrics.distanceAfter).toBeCloseTo(0.2);
+    expect(metrics.before).toBe(3);
+    expect(metrics.after).toBe(2);
   });
 });
 
@@ -364,6 +389,26 @@ describe("simulateRebalance", () => {
     ] });
     expect(result.rows.every((row) => row.tradeBRL === 0 && !row.needsAction)).toBe(true);
     expect(result.minimumContribution).toBe(0);
+  });
+
+  it("concentra a sugestão de aporte nas categorias fora da tolerância", () => {
+    const result = simulateRebalance({ ...base, contribution: 1000, categories: [
+      { key: "Acima", balance: 6100, targetPct: 50 },
+      { key: "Na meta", balance: 3000, targetPct: 30 },
+      { key: "Abaixo", balance: 900, targetPct: 20 },
+    ] });
+    expect(result.rows.map((row) => row.needsAction)).toEqual([true, false, true]);
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 0, 1000]);
+  });
+
+  it("aplica o aporte conforme as metas quando nada está fora da tolerância", () => {
+    const result = simulateRebalance({ ...base, contribution: 1000, categories: [
+      { key: "A", balance: 5000, targetPct: 50 },
+      { key: "B", balance: 3000, targetPct: 30 },
+      { key: "C", balance: 2000, targetPct: 20 },
+    ] });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([500, 300, 200]);
+    expect(result.rows.every((row) => !row.afterNeedsAction)).toBe(true);
   });
 
   it("preserva a tolerância relativa de 20% e o limite residual de 0,25%", () => {

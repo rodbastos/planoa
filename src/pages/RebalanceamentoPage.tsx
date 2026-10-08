@@ -14,7 +14,7 @@ import { importDate } from "../hooks/useImports";
 import { categoryColor, CHART } from "../lib/colors";
 import { formatBRL, formatDate, formatDateISO, formatPct } from "../lib/format";
 import {
-  assetTargetCategories, createRebalanceAssets, simulateAssetRebalance, summarizeRebalance, validAllocation,
+  assetTargetCategories, createRebalanceAssets, simulateAssetRebalance, summarizeMetrics, summarizeRebalance, validAllocation,
   type RebalanceAsset, type RebalanceDimension, type RebalanceMode, type RebalanceResult,
 } from "../lib/rebalance";
 import { ASSET_CLASSES, PRODUCT_TYPES, type AssetIntent, type Position, type Targets } from "../lib/types";
@@ -233,7 +233,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
               <Input id="rebalance-contribution" type="number" inputMode="decimal" min={0} step="0.01" value={contribution}
                 onChange={(event) => setContribution(event.target.value === "" ? 0 : event.target.valueAsNumber)} className="h-12 pl-10 text-lg font-semibold tabular-nums" />
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{mode === "full" ? "Deixe zero para realocar somente o patrimônio existente. " : "A sugestão prioriza os ativos abaixo da meta após o aporte. "}O saldo disponível da conta não é incluído automaticamente.</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{mode === "full" ? "Deixe zero para realocar somente o patrimônio existente. " : "A sugestão distribui o aporte proporcionalmente ao desvio dos ativos fora da tolerância (desvio relativo acima de 20% do alvo). Sem desvios relevantes, aplica conforme as metas, sem gerar rebalanceamento desnecessário. "}O saldo disponível da conta não é incluído automaticamente.</p>
           </div>
           <div className="lg:border-l lg:border-border lg:pl-6">
             {mode === "contribution" ? <>
@@ -410,6 +410,8 @@ function RebalanceResults({ result, assets, mode, contribution, groupTargets, on
     .map((row) => view === "asset" || groupTargets[view][row.key] === undefined
       ? row
       : { ...row, targetPct: groupTargets[view][row.key] / 100 });
+  const metrics = summarizeMetrics(result, assets, view, view === "asset" ? undefined : groupTargets[view]);
+  const groupLabel = view === "asset" ? "ativo" : view === "assetClass" ? "classe" : "produto";
   const chartData = summary.map((row) => ({ name: row.label,
     Antes: result.totalBefore > 0 ? row.currentBRL / result.totalBefore * 100 : 0,
     Depois: result.totalAfter > 0 ? row.afterBRL / result.totalAfter * 100 : 0, Alvo: row.targetPct * 100 }));
@@ -471,7 +473,7 @@ function RebalanceResults({ result, assets, mode, contribution, groupTargets, on
         </CardContent>
       </Card>
       <Card>
-        <CardHeader title="Leitura do cenário" subtitle="Indicadores calculados ativo por ativo" />
+        <CardHeader title="Leitura do cenário" subtitle="Indicadores no mesmo agrupamento do gráfico ao lado" />
         <CardContent className="space-y-5">
           {assets.some((asset) => asset.intent === "exit") && <div className="rounded-lg bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
             <strong className="text-foreground">{assets.filter((asset) => asset.intent === "exit").length} posições em saída, sem novos aportes.</strong>
@@ -479,11 +481,11 @@ function RebalanceResults({ result, assets, mode, contribution, groupTargets, on
           </div>}
           <div>
             <p className="text-xs text-muted-foreground">Distância do alvo</p>
-            <p className="mt-1 flex flex-wrap items-center gap-2 text-xl font-bold tabular-nums"><span className="text-muted-foreground">{percentagePoints(result.distanceBefore)}</span><ArrowRight className="h-4 w-4 text-muted-foreground" /><span className={result.distanceAfter > result.distanceBefore + 0.000001 ? "text-destructive" : "text-accent"}>{percentagePoints(result.distanceAfter)}</span></p>
-            <p className="mt-1 text-xs text-muted-foreground">Metade da soma dos desvios absolutos por ativo, incluindo caixa. Quanto menor, mais próximo do alvo.</p>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-xl font-bold tabular-nums"><span className="text-muted-foreground">{percentagePoints(metrics.distanceBefore)}</span><ArrowRight className="h-4 w-4 text-muted-foreground" /><span className={metrics.distanceAfter > metrics.distanceBefore + 0.000001 ? "text-destructive" : "text-accent"}>{percentagePoints(metrics.distanceAfter)}</span></p>
+            <p className="mt-1 text-xs text-muted-foreground">Metade da soma dos desvios absolutos por {groupLabel}, incluindo caixa. Segue o agrupamento do gráfico.</p>
           </div>
           <div className="border-t border-border pt-4">
-            <p className="text-sm font-semibold">{result.rows.filter((row) => row.needsAction).length} → {result.rows.filter((row) => row.afterNeedsAction).length} ativos fora da tolerância</p>
+            <p className="text-sm font-semibold">{metrics.before} → {metrics.after} {view === "asset" ? "ativos" : "categorias"} fora da tolerância</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Alerta quando o desvio relativo supera 20% do alvo e a diferença supera 0,25% do patrimônio (mínimo de R$ 1).</p>
           </div>
           {result.remainingCash > 0 && <div className="rounded-lg border border-border bg-muted/50 p-3 text-sm"><span className="font-semibold">{formatBRL(result.remainingCash)} ainda em caixa</span><p className="mt-1 text-xs text-muted-foreground">Incluído no total final, mas não alocado em ativos.</p></div>}
