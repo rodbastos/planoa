@@ -396,6 +396,48 @@ describe("RebalanceamentoPage", () => {
     expect(html).not.toContain("6.000,00");
   });
 
+  it("modo resgate pede o valor a retirar e tira da classe mais acima da meta, sem compras", () => {
+    const page = mount();
+    const json = () => JSON.stringify(page.toJSON());
+    expect(json()).toContain("Quanto você quer aportar?");
+    act(() => button(page, "Só resgate").props.onClick());
+    expect(json()).toContain("Quanto você quer resgatar?");
+    expect(json()).toContain("Nenhuma compra é sugerida");
+    expect(json()).not.toContain("Compras e resgates");
+    expect(json()).not.toContain("Aporte adicional");
+    const input = page.root.findByProps({ id: "rebalance-contribution" });
+    act(() => input.props.onChange({ target: { value: "2000", valueAsNumber: 2000 } }));
+    const resgates = page.root.findAllByType("p")
+      .filter((node) => node.children.join("").includes("resgatado"))
+      .map((node) => node.children.join(""));
+    expect(resgates[0]).toContain("Excesso significativo · prioridade de resgate");
+    expect(resgates[0]).toContain("2.000,00 resgatado");
+    expect(resgates[1]).toContain("Sem excesso antes do resgate");
+    expect(resgates[1]).toContain("0,00 resgatado");
+    expect(json()).toContain("Nenhuma compra neste modo");
+    expect(json()).toContain("Valor retirado da carteira");
+  });
+
+  it("só resgata de ativos em saída depois de liberar o resgate na tela", () => {
+    vi.mocked(useRebalancePreferences).mockReturnValue({ ...preferences,
+      preferences: { [rebalancePreferenceKey(portfolio.positions[0])]: { intent: "exit" } },
+    });
+    const page = mount();
+    act(() => button(page, "Só resgate").props.onClick());
+    const input = page.root.findByProps({ id: "rebalance-contribution" });
+    act(() => input.props.onChange({ target: { value: "2000", valueAsNumber: 2000 } }));
+    const resgates = () => page.root.findAllByType("p")
+      .filter((node) => node.children.join("").includes("resgatado"))
+      .map((node) => node.children.join(""));
+    // Título em saída sem liberação: o resgate sai da Ação, único ativo vendável
+    expect(resgates()[0]).toContain("0,00 resgatado");
+    expect(resgates()[1]).toContain("2.000,00 resgatado");
+    const checkbox = page.root.findAllByType("input").find((node) => node.props.type === "checkbox")!;
+    act(() => checkbox.props.onChange({ target: { checked: true } }));
+    expect(resgates()[0]).toContain("2.000,00 resgatado");
+    expect(resgates()[1]).toContain("0,00 resgatado");
+  });
+
   it("não exibe resultados enquanto a carteira está carregando", () => {
     vi.mocked(usePortfolio).mockReturnValue({ ...portfolio, loading: true });
     expect(render()).not.toContain("Cenário e plano");

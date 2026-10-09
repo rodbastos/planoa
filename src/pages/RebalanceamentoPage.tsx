@@ -179,7 +179,9 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   const { result, validationError } = useMemo(() => {
     try {
       return {
-        result: simulateAssetRebalance({ assets, dimension, targets, contribution, mode, manualDimension: "asset",
+        result: simulateAssetRebalance({ assets, dimension, targets,
+          contribution: mode === "contribution" ? contribution : 0,
+          withdrawal: mode === "withdrawal" ? contribution : 0, mode, manualDimension: "asset",
           manualContributions: manualMode && mode === "contribution" ? manual : undefined }),
         validationError: null,
       };
@@ -292,7 +294,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
             <Tabs
               tabs={[
                 { id: "contribution", label: "Só novo aporte" },
-                { id: "full", label: "Compras e resgates" },
+                { id: "withdrawal", label: "Só resgate" },
               ]}
               active={mode}
               onChange={(value) => { setMode(value as RebalanceMode); setActionError(null); }}
@@ -300,7 +302,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
           </div>
           <div>
             <label htmlFor="rebalance-contribution" className="mb-2 block text-sm font-semibold">
-              {mode === "full" ? "Aporte adicional (opcional)" : "Quanto você quer aportar?"}
+              {mode === "withdrawal" ? "Quanto você quer resgatar?" : "Quanto você quer aportar?"}
             </label>
             <div className="relative w-52">
               <span className="absolute left-3 top-3 text-sm text-muted-foreground">R$</span>
@@ -327,7 +329,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
           <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
             {mode === "contribution"
               ? `Prioriza classes com desvio abaixo da meta maior que ${pctPlaceholder(REBALANCE_TOLERANCE)}% e diferença maior que ${pctPlaceholder(RESIDUAL_TOLERANCE)}% do patrimônio (mínimo de R$ 1). Reduz os maiores gaps da carteira; a sobra cobre déficits menores. Dentro da classe, completa um ativo por vez.`
-              : "O plano busca a meta de cada ativo com compras e resgates; o aporte cobre a diferença. Nenhuma ordem é executada."}
+              : `Resgata primeiro das classes com excesso acima da meta maior que ${pctPlaceholder(REBALANCE_TOLERANCE)}% e diferença maior que ${pctPlaceholder(RESIDUAL_TOLERANCE)}% do patrimônio (mínimo de R$ 1). Dentro da classe, vende o ativo mais acima do alvo; ativos em saída exigem "Permitir resgate". Nenhuma compra é sugerida.`}
           </p>
         </CardContent>
       </Card>
@@ -351,11 +353,16 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
               const weight = (targets[key] ?? 0) / 100;
               const below = balance < totalBalance * weight;
               const priority = below && allocationNeedsAction(balance, totalBalance, weight);
+              const excessPriority = !below && allocationNeedsAction(balance, totalBalance, weight);
               return <div key={key} className="rounded-lg border border-border px-3 py-2 text-xs">
                 <p className="font-medium">{key} · Meta na carteira: {formatPct(weight)}</p>
                 {mode === "contribution" && <p className={cn("mt-1", priority ? "font-medium text-accent" : "text-muted-foreground")}>
                   {priority ? "Déficit significativo · prioridade" : below ? "Déficit dentro da tolerância · recebe sobra" : "Sem déficit antes do aporte"}
                   {result && !savingIntent && !failedIntent && ` · ${formatBRL(groupPlan.get(key)?.purchases ?? 0)} no plano`}
+                </p>}
+                {mode === "withdrawal" && <p className={cn("mt-1", excessPriority ? "font-medium text-destructive" : "text-muted-foreground")}>
+                  {excessPriority ? "Excesso significativo · prioridade de resgate" : !below ? "Excesso dentro da tolerância" : "Sem excesso antes do resgate"}
+                  {result && !savingIntent && !failedIntent && ` · ${formatBRL(groupPlan.get(key)?.sales ?? 0)} resgatado`}
                 </p>}
                 <p className={cn("mt-1", valid ? "text-muted-foreground" : "text-destructive")}>
                   {members.length} ativos · Distribuição interna: {formatPct(sum / 100)} / 100%
@@ -427,7 +434,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
             </table>
             {!filteredAssets.length && <p className="py-6 text-center text-sm text-muted-foreground">Nenhum ativo encontrado. {assets.length === 0 && "Adicione um ativo futuro para iniciar."}</p>}
           </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">Edite o saldo para simular valorização ou queda. Ativos em saída têm meta zero e nunca recebem aportes — no modo compras e resgates, marque “Permitir resgate” para simular a venda. Para zerar uma posição mantida, use meta 0 no modo completo.</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">Edite o saldo para simular valorização ou queda. Ativos em saída têm meta zero e nunca recebem aportes — no modo só resgate, marque “Permitir resgate” para simular a venda.</p>
         </CardContent>
       </Card>
 
@@ -466,7 +473,7 @@ function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manu
           onChange={(event) => onIntent(asset.preferenceKey!, event.target.value as AssetIntent)}>
           <option value="keep">Manter</option><option value="exit">Sair quando possível</option>
         </Select> : <span className="text-xs text-muted-foreground">Novo investimento</span>}
-        {asset.intent === "exit" && mode === "full" && <label className="mt-2 flex w-40 items-start gap-2 text-xs text-muted-foreground">
+        {asset.intent === "exit" && mode === "withdrawal" && <label className="mt-2 flex w-40 items-start gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={asset.allowExitSale ?? false} onChange={(event) => onUpdate(asset.key, { allowExitSale: event.target.checked })} className="mt-0.5 accent-accent" />
           Permitir resgate
         </label>}
@@ -587,9 +594,9 @@ function RebalanceResults({ result, assets, mode, contribution, groupTargets, on
   return <div className="space-y-5">
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard label="Patrimônio do cenário" value={formatBRL(result.totalBefore)} hint="Saldos existentes, antes das operações" icon={<Wallet className="h-4 w-4" />} />
-      <StatCard label="Após o rebalanceamento" value={formatBRL(result.totalAfter)} hint={`Inclui ${formatBRL(contribution)} de aporte e o caixa restante`} />
-      <StatCard label="Total a aplicar" value={formatBRL(result.purchases)} hint="Compras simuladas por ativo" icon={<ArrowUpRight className="h-4 w-4" />} />
-      <StatCard label="Total a resgatar" value={formatBRL(result.sales)} hint={mode === "contribution" ? "Sem vendas neste modo" : "Recursos reutilizados nas compras"} icon={<ArrowDownLeft className="h-4 w-4" />} />
+      <StatCard label="Após o rebalanceamento" value={formatBRL(result.totalAfter)} hint={mode === "withdrawal" ? `Depois de resgatar ${formatBRL(contribution)}` : `Inclui ${formatBRL(contribution)} de aporte e o caixa restante`} />
+      <StatCard label="Total a aplicar" value={formatBRL(result.purchases)} hint={mode === "withdrawal" ? "Nenhuma compra neste modo" : "Compras simuladas por ativo"} icon={<ArrowUpRight className="h-4 w-4" />} />
+      <StatCard label="Total a resgatar" value={formatBRL(result.sales)} hint={mode === "contribution" ? "Sem vendas neste modo" : "Valor retirado da carteira"} icon={<ArrowDownLeft className="h-4 w-4" />} />
     </div>
 
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">

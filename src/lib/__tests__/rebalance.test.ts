@@ -172,6 +172,101 @@ describe("rebalanceamento por ativo", () => {
   });
 });
 
+describe("resgate por valor solicitado", () => {
+  const withdraw = (withdrawal: number, rows = assets()) => simulateAssetRebalance({
+    assets: rows, dimension: "assetClass", targets: groupTargets, contribution: 0, withdrawal, mode: "withdrawal",
+  });
+
+  it("retira exatamente o solicitado, sem compras nem reinvestimento", () => {
+    const result = withdraw(1000);
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([-1000, 0, 0]);
+    expect(result.purchases).toBe(0);
+    expect(result.sales).toBe(1000);
+    expect(result.totalBefore).toBe(10000);
+    expect(result.totalAfter).toBe(9000);
+    expect(result.remainingCash).toBe(0);
+    expect(result.rows.map((row) => row.targetBRL)).toEqual([3375, 1125, 4500]);
+  });
+
+  it("usa a maior diferença relativa para o alvo dentro da classe", () => {
+    const rows = assets();
+    rows[0].classSharePct = 90;
+    rows[1].classSharePct = 10;
+    expect(withdraw(1000, rows).rows.map((row) => row.tradeBRL)).toEqual([0, -1000, 0]);
+    expect(withdraw(4000, rows).rows.map((row) => row.tradeBRL)).toEqual([-2300, -1700, 0]);
+  });
+
+  it("prioriza a classe acima da meta antes de um excesso maior isolado em outra classe", () => {
+    const rows = assets();
+    rows[0].classSharePct = 5;
+    rows[1].classSharePct = 95;
+    const result = simulateAssetRebalance({ assets: rows, dimension: "assetClass", targets: { CDI: 90, RV: 10 }, contribution: 0, withdrawal: 500, mode: "withdrawal" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 0, -500]);
+  });
+
+  it.each(["assetClass", "productType"] as const)("equilibra os maiores excessos significativos por %s", (dimension) => {
+    const targets = { A: 50, B: 30, C: 20 };
+    const rows = createRebalanceAssets([1000, 5500, 3500].map((balance, index) => ({ ...positions[0], id: String(index), name: String(index), assetClass: ["A", "B", "C"][index], productType: ["A", "B", "C"][index], balance })), targets);
+    const result = simulateAssetRebalance({ assets: rows, dimension, targets, contribution: 0, withdrawal: 2000, mode: "withdrawal" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, -1600, -400]);
+  });
+
+  it("só usa excessos dentro da tolerância depois dos significativos", () => {
+    const targets = { A: 80, B: 10, C: 10 };
+    const rows = createRebalanceAssets([8200, 1300, 500].map((balance, index) => ({ ...positions[0], id: String(index), assetClass: ["A", "B", "C"][index], balance })), targets);
+    const result = simulateAssetRebalance({ assets: rows, dimension: "assetClass", targets, contribution: 0, withdrawal: 2000, mode: "withdrawal" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([-1500, -500, 0]);
+  });
+
+  it("preserva ativos em saída bloqueados e permite resgate após liberação", () => {
+    const rows = assets();
+    rows[0].intent = "exit";
+    expect(withdraw(1000, rows).rows[0].tradeBRL).toBe(0);
+    expect(() => withdraw(5000, rows)).toThrow(/saldo disponível para resgate/);
+    rows[0].allowExitSale = true;
+    expect(withdraw(1000, rows).rows.map((row) => row.tradeBRL)).toEqual([-1000, 0, 0]);
+  });
+
+  it("resgata de uma classe toda em saída sem exigir um ativo para receber compras", () => {
+    const rows = assets();
+    rows[0].intent = rows[1].intent = "exit";
+    rows[0].allowExitSale = rows[1].allowExitSale = true;
+    const result = withdraw(1000, applyExitShares(rows));
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([-1000, 0, 0]);
+    expect(result.rows[0].targetPct).toBe(0);
+    expect(result.purchases).toBe(0);
+  });
+
+  it("não movimenta com valor zero e permite retirar todo o saldo disponível", () => {
+    expect(withdraw(0).rows.every((row) => row.tradeBRL === 0)).toBe(true);
+    const result = withdraw(10000);
+    expect(result.totalAfter).toBe(0);
+    expect(result.sales).toBe(10000);
+    expect(result.rows.every((row) => row.afterBRL === 0 && row.afterPct === 0)).toBe(true);
+  });
+
+  it.each([-1, NaN, Infinity, 10000.01])("rejeita resgate inválido ou acima do patrimônio: %s", (value) => {
+    expect(() => withdraw(value)).toThrow();
+  });
+
+  it("não aceita aporte misturado ao pedido de resgate", () => {
+    expect(() => simulateAssetRebalance({ assets: assets(), dimension: "assetClass", targets: groupTargets, contribution: 100, withdrawal: 500, mode: "withdrawal" })).toThrow(/aporte/);
+  });
+
+  it("conserva cada centavo, nunca compra e nunca produz saldo negativo", () => {
+    for (let i = 1; i <= 100; i++) {
+      const value = i * 87.31;
+      const result = withdraw(value);
+      expect(result.rows.every((row) => row.tradeBRL <= 0 && row.afterBRL >= 0)).toBe(true);
+      expect(cents(result.sales)).toBe(cents(value));
+      expect(result.rows.reduce((sum, row) => sum + cents(row.afterBRL), 0) + cents(result.sales)).toBe(1000000);
+      expect(cents(result.totalAfter)).toBe(1000000 - cents(value));
+      expect(result.purchases).toBe(0);
+      expect(result.remainingCash).toBe(0);
+    }
+  });
+});
+
 describe("aporte hierárquico por classe", () => {
   const scenario = (balances: number[], weights: number[]) => {
     const targets = Object.fromEntries(weights.map((value, index) => [`Classe ${index}`, value]));

@@ -2,7 +2,7 @@ import { allocationNeedsAction } from "./allocation";
 import { instrumentKey } from "./classification";
 import type { AssetIntent, Position } from "./types";
 
-export type RebalanceMode = "contribution" | "full";
+export type RebalanceMode = "contribution" | "full" | "withdrawal";
 export type RebalanceDimension = "asset" | "assetClass" | "productType";
 
 export interface RebalanceAsset {
@@ -31,6 +31,8 @@ export interface AssetRebalanceInput {
   targets: Record<string, number>;
   contribution: number;
   mode: RebalanceMode;
+  /** valor a retirar da carteira, usado apenas no modo "withdrawal" */
+  withdrawal?: number;
   manualContributions?: Record<string, number>;
   manualDimension?: RebalanceDimension;
 }
@@ -486,11 +488,155 @@ function planGroupContribution(
   );
 }
 
+/**
+ * Plano de resgate — espelho invertido do aporte hierárquico: primeiro reduz o
+ * excesso das classes acima da meta (mesma tolerância da Carteira Ideal) —
+ * excessos significativos primeiro, equalizando os maiores em nível; dentro da
+ * classe, vende o ativo mais acima do seu alvo primeiro (alvo zero, como os
+ * marcados para saída, sai antes de qualquer outro). Nenhuma compra é sugerida.
+ * O que exceder todos os excessos é repartido proporcionalmente ao saldo ainda
+ * resgatável de cada classe.
+ */
+function planWithdrawal(
+  assets: RebalanceAsset[],
+  dimension: "assetClass" | "productType",
+  groupTargets: Record<string, number>,
+  withdrawal: number,
+): RebalanceResult {
+  if (!validAllocation(Object.values(groupTargets))) {
+    throw new Error("As metas das categorias devem estar entre 0% e 100% e somar 100%.");
+  }
+  const budget = toCents(withdrawal);
+  const balances = assets.map((asset) => toCents(asset.balance));
+  const total = balances.reduce((sum, value) => sum + value, 0);
+  const finalTotal = total - budget;
+  if (!Number.isSafeInteger(finalTotal) || finalTotal < 0) {
+    throw new Error("O resgate excede o patrimônio do cenário.");
+  }
+  const sellable = assets.map((asset, i) => asset.intent === "exit" && !asset.allowExitSale ? 0 : balances[i]);
+  if (budget > sellable.reduce((sum, value) => sum + value, 0)) {
+    throw new Error("O resgate solicitado excede o saldo disponível para resgate. Libere o resgate nos ativos em saída ou reduza o valor.");
+  }
+
+  const grouped = new Map<string, number[]>();
+  assets.forEach((asset, i) => {
+    const members = grouped.get(asset[dimension]) ?? [];
+    members.push(i);
+    grouped.set(asset[dimension], members);
+  });
+  const field = dimension === "assetClass" ? "classSharePct" : "productSharePct";
+  const memberTargets = assets.map(() => 0);
+  const memberWeights = assets.map(() => 0);
+  const groups = [...grouped.entries()].map(([key, members]) => {
+    const raw = members.map((i) => assets[i][field]);
+    const eligible = members.map((i, j) => assets[i].intent === "exit" ? 0 : raw[j]);
+    const eligibleSum = eligible.reduce((sum, value) => sum + value, 0);
+    if (eligibleSum > 0 && !validAllocation(raw)) {
+      throw new Error(`Os pesos dos ativos em ${key} devem estar entre 0% e 100% e somar 100%.`);
+    }
+    const weight = (groupTargets[key] ?? 0) / 100;
+    const target = Math.floor(weight * finalTotal);
+    if (eligibleSum > 0) {
+      const split = splitCents(target, eligible);
+      members.forEach((i, j) => {
+        memberTargets[i] = split[j];
+        memberWeights[i] = weight * eligible[j] / eligibleSum;
+      });
+    }
+    return {
+      members,
+      balance: members.reduce((sum, i) => sum + balances[i], 0),
+      sellable: members.reduce((sum, i) => sum + sellable[i], 0),
+      weight,
+      target,
+    };
+  });
+  const excesses = groups.map((group) => Math.max(0, group.balance - group.target));
+  const significant = groups.map((group) => group.balance > group.weight * total && needsAction(group.balance, total, group.weight));
+  const first = minimizeSquaredGaps(budget, excesses,
+    groups.map((group, i) => significant[i] ? Math.min(group.sellable, excesses[i]) : 0));
+  const second = minimizeSquaredGaps(
+    budget - first.reduce((sum, value) => sum + value, 0),
+    excesses.map((excess, i) => Math.max(0, excess - first[i])),
+    groups.map((group, i) => Math.max(0, Math.min(group.sellable - first[i], excesses[i] - first[i]))));
+  const beyond = budget - first.reduce((sum, value) => sum + value, 0) - second.reduce((sum, value) => sum + value, 0);
+  const third = beyond > 0
+    ? splitCents(beyond, groups.map((group, i) => group.sellable - first[i] - second[i]))
+    : groups.map(() => 0);
+
+  const trades = balances.map(() => 0);
+  groups.forEach((group, gi) => {
+    let left = first[gi] + second[gi] + third[gi];
+    if (left <= 0) return;
+    const excessRank = group.members
+      .filter((i) => sellable[i] > 0 && balances[i] > memberTargets[i])
+      .map((i) => ({ i, excess: balances[i] - memberTargets[i] }))
+      .sort((a, b) =>
+        (memberTargets[b.i] === 0 ? Number.POSITIVE_INFINITY : b.excess / memberTargets[b.i])
+        - (memberTargets[a.i] === 0 ? Number.POSITIVE_INFINITY : a.excess / memberTargets[a.i])
+        || b.excess - a.excess || a.i - b.i);
+    for (const { i, excess } of excessRank) {
+      if (left === 0) break;
+      const take = Math.min(excess, left);
+      trades[i] -= take;
+      left -= take;
+    }
+    const restRank = group.members
+      .filter((i) => sellable[i] > 0 && balances[i] + trades[i] > 0)
+      .sort((a, b) => (balances[b] + trades[b]) - (balances[a] + trades[a]) || a - b);
+    for (const i of restRank) {
+      if (left === 0) break;
+      const take = Math.min(balances[i] + trades[i], left);
+      trades[i] -= take;
+      left -= take;
+    }
+  });
+
+  const rows: RebalanceRow[] = assets.map((asset, i) => {
+    const after = balances[i] + trades[i];
+    return {
+      key: asset.key,
+      currentBRL: balances[i] / 100,
+      currentPct: total > 0 ? balances[i] / total : 0,
+      targetPct: memberWeights[i],
+      targetBRL: memberTargets[i] / 100,
+      tradeBRL: trades[i] / 100,
+      afterBRL: after / 100,
+      afterPct: finalTotal > 0 ? after / finalTotal : 0,
+      needsAction: needsAction(balances[i], total, memberWeights[i]),
+      afterNeedsAction: needsAction(after, finalTotal, memberWeights[i]),
+    };
+  });
+  return {
+    rows,
+    totalBefore: total / 100,
+    totalAfter: finalTotal / 100,
+    purchases: 0,
+    sales: rows.reduce((sum, row) => sum + Math.max(0, -row.tradeBRL), 0),
+    remainingCash: 0,
+    minimumContribution: null,
+    distanceBefore: total > 0 ? rows.reduce((sum, row) => sum + Math.abs(row.currentPct - row.targetPct), 0) / 2 : 0,
+    distanceAfter: finalTotal > 0 ? rows.reduce((sum, row) => sum + Math.abs(row.afterPct - row.targetPct), 0) / 2 : 0,
+  };
+}
+
 export function simulateAssetRebalance({
-  assets, dimension, targets, contribution, mode, manualContributions, manualDimension = dimension,
+  assets, dimension, targets, contribution, withdrawal, mode, manualContributions, manualDimension = dimension,
 }: AssetRebalanceInput): RebalanceResult {
   if (assets.some((asset) => asset.future && (asset.balance !== 0 || asset.originalBalance !== 0))) {
     throw new Error("Ativos futuros devem ter saldo inicial zero. Use aportes ou resgates para financiá-los.");
+  }
+  if (mode === "withdrawal") {
+    if ((contribution ?? 0) !== 0) {
+      throw new Error("O modo de resgate não aceita aporte. Informe apenas o valor a resgatar.");
+    }
+    if (manualContributions && Object.values(manualContributions).some((value) => value !== 0)) {
+      throw new Error("O resgate é distribuído pela prioridade das classes; ajustes manuais não estão disponíveis neste modo.");
+    }
+    if (dimension === "asset") {
+      throw new Error("O resgate por valor usa a hierarquia de classes ou tipos de produto.");
+    }
+    return planWithdrawal(assets, dimension, targets, withdrawal ?? 0);
   }
   const categories = assetTargetCategories(assets, dimension, targets);
   let manual = manualContributions;
