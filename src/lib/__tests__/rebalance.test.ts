@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assetTargetCategories,
   createRebalanceAssets,
   rebalancePreferenceKey,
   simulateAssetRebalance,
@@ -166,6 +167,45 @@ describe("rebalanceamento por ativo", () => {
     expect(metrics.distanceAfter).toBeCloseTo(0.2);
     expect(metrics.before).toBe(3);
     expect(metrics.after).toBe(2);
+  });
+});
+
+describe("meta manual por ativo", () => {
+  it("fixa a meta do ativo e redimensiona as demais sugestões proporcionalmente", () => {
+    const rows = assets();
+    rows[0].targetOverridePct = 30;
+    const categories = assetTargetCategories(rows, "assetClass", groupTargets);
+    expect(categories.map((row) => row.targetPct)).toEqual([30, expect.closeTo(14), expect.closeTo(56)]);
+  });
+
+  it("vale na visão por ativo e alimenta a simulação", () => {
+    const rows = assets();
+    rows[0].targetOverridePct = 60;
+    const categories = assetTargetCategories(rows, "asset", {});
+    expect(categories.map((row) => row.targetPct)).toEqual([60, 8, 32]);
+    const result = simulateAssetRebalance({ assets: rows, dimension: "asset", targets: {}, contribution: 0, mode: "full" });
+    expect(result.rows[2].afterBRL).toBeCloseTo(3200);
+  });
+
+  it("ignora override em ativo em saída e rejeita soma acima de 100%", () => {
+    const rows = assets();
+    rows[0].intent = "exit";
+    rows[0].targetOverridePct = 80;
+    rows[2].targetOverridePct = 40;
+    expect(assetTargetCategories(rows, "asset", {}).map((row) => row.targetPct)).toEqual([0, 60, 40]);
+    const over = assets();
+    over[0].targetOverridePct = 70;
+    over[2].targetOverridePct = 40;
+    expect(() => assetTargetCategories(over, "asset", {})).toThrow(/metas manuais/);
+  });
+
+  it("rejeita meta manual fora de 0–100 ou sem ativo elegível para absorver o restante", () => {
+    const rows = assets();
+    rows[0].targetOverridePct = 110;
+    expect(() => assetTargetCategories(rows, "asset", {})).toThrow(/meta manual/);
+    const all = assets();
+    all.forEach((asset, index) => { asset.targetOverridePct = [30, 30, 30][index]; });
+    expect(() => assetTargetCategories(all, "asset", {})).toThrow(/absorver/);
   });
 });
 
@@ -399,6 +439,27 @@ describe("simulateRebalance", () => {
     ] });
     expect(result.rows.map((row) => row.needsAction)).toEqual([true, false, true]);
     expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 0, 1000]);
+  });
+
+  it("não estoura o alvo de uma categoria enquanto houver déficit em outras", () => {
+    const result = simulateRebalance({ ...base, contribution: 10000, categories: [
+      { key: "Dentro", balance: 2900, targetPct: 30 },
+      { key: "Fora abaixo", balance: 100, targetPct: 20 },
+      { key: "Fora acima", balance: 7000, targetPct: 50 },
+    ] });
+    // Preenche cada déficit apenas até o alvo; a sobra cobre os demais deficits.
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([3100, 3900, 3000]);
+    expect(result.rows.every((row) => row.afterBRL <= row.targetBRL + 0.005)).toBe(true);
+    expect(result.distanceAfter).toBe(0);
+  });
+
+  it("nunca sugere aporte para categoria acima do alvo do patrimônio final", () => {
+    const result = simulateRebalance({ ...base, contribution: 2000, categories: [
+      { key: "Acima", balance: 9500, targetPct: 5 },
+      { key: "Abaixo", balance: 500, targetPct: 95 },
+    ] });
+    expect(result.rows[0].tradeBRL).toBe(0);
+    expect(result.rows[1].tradeBRL).toBe(2000);
   });
 
   it("aplica o aporte conforme as metas quando nada está fora da tolerância", () => {

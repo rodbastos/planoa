@@ -19,6 +19,8 @@ export interface RebalanceAsset {
   intent?: AssetIntent;
   allowExitSale?: boolean;
   targetPct: number;
+  /** meta manual (% da carteira): quando definida, substitui a meta sugerida do ativo */
+  targetOverridePct?: number;
   classSharePct: number;
   productSharePct: number;
 }
@@ -103,6 +105,33 @@ function needsAction(balance: number, total: number, weight: number): boolean {
     (target === 0 || difference / target > REBALANCE_TOLERANCE);
 }
 
+/**
+ * Distribui `amount` proporcionalmente ao que falta para o alvo de cada item,
+ * sem nunca ultrapassar o déficit. Repete em rodadas até esgotar o valor ou os gaps.
+ */
+function fillGaps(amount: number, gaps: number[]): { fills: number[]; leftover: number } {
+  const fills = gaps.map(() => 0);
+  const caps = [...gaps];
+  let left = amount;
+  let active = gaps.map((gap, index) => (gap > 0 ? index : -1)).filter((index) => index >= 0);
+  while (left > 0 && active.length > 0) {
+    const shares = splitCents(left, active.map((index) => caps[index]));
+    let spent = 0;
+    const next: number[] = [];
+    active.forEach((index, j) => {
+      const give = Math.min(shares[j], caps[index]);
+      fills[index] += give;
+      caps[index] -= give;
+      spent += give;
+      if (caps[index] > 0) next.push(index);
+    });
+    if (spent === 0) break;
+    left -= spent;
+    active = next;
+  }
+  return { fills, leftover: left };
+}
+
 export function simulateRebalance({
   categories,
   contribution,
@@ -136,9 +165,24 @@ export function simulateRebalance({
   } else {
     const gaps = targets.map((target, i) => Math.max(0, target - balances[i]));
     const flagged = targets.map((_, i) => needsAction(balances[i], total, weights[i]));
-    let distribution = gaps.map((gap, i) => (flagged[i] ? gap : 0));
-    if (!distribution.some((value) => value > 0)) distribution = flagged.some(Boolean) ? gaps : weights;
-    trades = splitCents(budget, distribution);
+    const remaining = [...gaps];
+    trades = balances.map(() => 0);
+    let left = budget;
+    // Prioriza categorias fora da tolerância; o que sobrar cobre os demais déficits,
+    // sempre limitado ao que falta para o alvo. Só sobra para a meta proporcional
+    // quando nenhuma categoria está abaixo do alvo (todas atingidas).
+    for (const onlyFlagged of [true, false]) {
+      if (left === 0) break;
+      const pool = remaining.map((gap, i) => (!onlyFlagged || flagged[i] ? gap : 0));
+      const { fills, leftover } = fillGaps(left, pool);
+      trades = trades.map((trade, i) => trade + fills[i]);
+      for (let i = 0; i < remaining.length; i++) remaining[i] -= fills[i];
+      left = leftover;
+    }
+    if (left > 0) {
+      const extra = splitCents(left, weights);
+      trades = trades.map((trade, i) => trade + extra[i]);
+    }
   }
 
   const remainingCash = budget - trades.reduce((sum, value) => sum + value, 0);
@@ -221,26 +265,78 @@ function groupShares(assets: RebalanceAsset[], dimension: "assetClass" | "produc
   return eligible;
 }
 
+/**
+ * Combina a meta sugerida de cada ativo com as metas manuais (`targetOverridePct`):
+ * ativos com override ficam fixos no valor informado e os demais são redimensionados
+ * proporcionalmente para completar 100%. Ativos em saída têm meta efetiva zero.
+ */
+function applyTargetOverrides(assets: RebalanceAsset[], natural: Map<string, number>): Map<string, number> {
+  const effective = new Map<string, number>();
+  let overrideSum = 0;
+  let naturalSum = 0;
+  for (const asset of assets) {
+    if (asset.intent === "exit") {
+      effective.set(asset.key, 0);
+      continue;
+    }
+    const override = asset.targetOverridePct;
+    if (override !== undefined) {
+      if (!Number.isFinite(override) || override < 0 || override > 100) {
+        throw new Error(`A meta manual de ${asset.name} deve estar entre 0% e 100%.`);
+      }
+      effective.set(asset.key, override);
+      overrideSum += override;
+    } else {
+      const base = natural.get(asset.key) ?? 0;
+      effective.set(asset.key, base);
+      naturalSum += base;
+    }
+  }
+  if (overrideSum + naturalSum === 0) {
+    throw new Error("Não há ativo elegível para receber recursos. Defina uma meta para um ativo que deseja manter ou adicione um ativo futuro.");
+  }
+  if (overrideSum > 100.00001) {
+    throw new Error("As metas manuais por ativo somam mais de 100%. Ajuste os valores para liberar a simulação.");
+  }
+  const remainder = Math.max(0, 100 - overrideSum);
+  if (naturalSum === 0) {
+    if (remainder > 0.05) {
+      throw new Error("As metas manuais não somam 100% e não há outro ativo elegível para absorver a diferença.");
+    }
+    return effective;
+  }
+  const scale = remainder / naturalSum;
+  for (const asset of assets) {
+    if (asset.intent === "exit" || asset.targetOverridePct !== undefined) continue;
+    effective.set(asset.key, (effective.get(asset.key) ?? 0) * scale);
+  }
+  return effective;
+}
+
 export function assetTargetCategories(
   assets: RebalanceAsset[], dimension: RebalanceDimension, targets: Record<string, number>,
 ): RebalanceCategory[] {
+  const natural = new Map<string, number>();
   if (dimension === "asset") {
-    if (!validAllocation(assets.map((asset) => asset.targetPct))) throw new Error("As metas base dos ativos devem estar entre 0% e 100% e somar 100%.");
-    const eligibleSum = assets.reduce((sum, asset) => sum + (asset.intent === "exit" ? 0 : asset.targetPct), 0);
-    if (eligibleSum === 0) throw new Error("Não há ativo elegível para receber recursos. Defina uma meta para um ativo que deseja manter ou adicione um ativo futuro.");
-    return assets.map((asset) => ({ key: asset.key, balance: asset.balance,
-      targetPct: asset.intent === "exit" ? 0 : asset.targetPct / eligibleSum * 100 }));
+    const values = assets.map((asset) => asset.targetPct);
+    const hasOverrides = assets.some((asset) => asset.targetOverridePct !== undefined);
+    const valid = hasOverrides
+      ? values.every((value) => Number.isFinite(value) && value >= 0 && value <= 100)
+      : validAllocation(values);
+    if (!valid) throw new Error("As metas base dos ativos devem estar entre 0% e 100% e somar 100%.");
+    for (const asset of assets) natural.set(asset.key, asset.targetPct);
+  } else {
+    if (!validAllocation(Object.values(targets))) throw new Error("As metas das categorias devem estar entre 0% e 100% e somar 100%.");
+    for (const [key, target] of Object.entries(targets)) {
+      if (target === 0) continue;
+      const members = assets.filter((asset) => asset[dimension] === key);
+      const shares = groupShares(members, dimension, key);
+      const sum = shares.reduce((acc, value) => acc + value, 0);
+      members.forEach((asset, i) => natural.set(asset.key, (natural.get(asset.key) ?? 0) + target * shares[i] / sum));
+    }
   }
-  if (!validAllocation(Object.values(targets))) throw new Error("As metas das categorias devem estar entre 0% e 100% e somar 100%.");
-  const percentages = new Map<string, number>();
-  for (const [key, target] of Object.entries(targets)) {
-    if (target === 0) continue;
-    const members = assets.filter((asset) => asset[dimension] === key);
-    const shares = groupShares(members, dimension, key);
-    const sum = shares.reduce((acc, value) => acc + value, 0);
-    members.forEach((asset, i) => percentages.set(asset.key, target * shares[i] / sum));
-  }
-  return assets.map((asset) => ({ key: asset.key, balance: asset.balance, targetPct: percentages.get(asset.key) ?? 0 }));
+  const effective = applyTargetOverrides(assets, natural);
+  return assets.map((asset) => ({ key: asset.key, balance: asset.balance, targetPct: effective.get(asset.key) ?? 0 }));
 }
 
 export function simulateAssetRebalance({
