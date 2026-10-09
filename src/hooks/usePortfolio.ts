@@ -4,6 +4,7 @@ import {
   subscribePositions,
   subscribeRebalancePreferences,
   saveRebalancePreference,
+  saveRebalanceShares,
   subscribeRetirement,
   subscribeRules,
   subscribeTargets,
@@ -14,6 +15,7 @@ import { useImports } from "./useImports";
 import type {
   AssetIntent,
   InstrumentRule,
+  RebalancePreference,
   RetirementPlan,
   Targets,
   WealthYear,
@@ -115,7 +117,7 @@ export function useRebalancePreferences() {
   const uid = user?.uid;
   const [state, setState] = useState<{
     uid?: string;
-    preferences: Record<string, AssetIntent>;
+    preferences: Record<string, RebalancePreference>;
     loading: boolean;
     error: string | null;
   }>({ preferences: {}, loading: true, error: null });
@@ -133,7 +135,28 @@ export function useRebalancePreferences() {
   async function saveIntent(key: string, intent: AssetIntent) {
     if (!uid) throw new Error("Entre na sua conta para salvar a intenção do ativo.");
     await saveRebalancePreference(uid, key, intent);
-    setState((current) => current.uid === uid ? { ...current, preferences: { ...current.preferences, [key]: intent } } : current);
+    setState((current) => current.uid === uid ? {
+      ...current,
+      preferences: { ...current.preferences, [key]: { ...current.preferences[key], intent } },
+    } : current);
+  }
+
+  async function saveShare(
+    key: string,
+    patch: { classSharePct?: number | null; productSharePct?: number | null },
+  ) {
+    if (!uid) throw new Error("Entre na sua conta para salvar o peso do ativo.");
+    await saveRebalanceShares(uid, key, patch);
+    setState((current) => {
+      if (current.uid !== uid) return current;
+      const next = { ...current.preferences[key] };
+      for (const field of ["classSharePct", "productSharePct"] as const) {
+        const value = patch[field];
+        if (value === undefined) continue;
+        if (value === null) delete next[field]; else next[field] = value;
+      }
+      return { ...current, preferences: { ...current.preferences, [key]: next } };
+    });
   }
 
   return {
@@ -141,6 +164,7 @@ export function useRebalancePreferences() {
     loading: state.uid !== uid || state.loading,
     error: state.uid === uid ? state.error : null,
     saveIntent,
+    saveShare,
   };
 }
 

@@ -79,6 +79,15 @@ export interface InstrumentRule {
 
 export type AssetIntent = "keep" | "exit";
 
+/** preferências de rebalanceamento salvas por instrumento (rebalancePreferenceKey) */
+export interface RebalancePreference {
+  intent?: AssetIntent;
+  /** peso manual do ativo dentro da classe, em % — sobrescreve a proporção dos saldos */
+  classSharePct?: number;
+  /** peso manual do ativo dentro do tipo de produto, em % */
+  productSharePct?: number;
+}
+
 export interface Targets {
   byAssetClass: Record<string, number>;
   byProductType: Record<string, number>;

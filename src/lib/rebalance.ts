@@ -106,30 +106,34 @@ function needsAction(balance: number, total: number, weight: number): boolean {
 }
 
 /**
- * Distribui `amount` proporcionalmente ao que falta para o alvo de cada item,
- * sem nunca ultrapassar o déficit. Repete em rodadas até esgotar o valor ou os gaps.
+ * Ordena os déficits por prioridade de aporte: primeiro os ativos fora da
+ * tolerância; dentro de cada grupo, o maior desvio relativo ao alvo (gap/meta).
  */
-function fillGaps(amount: number, gaps: number[]): { fills: number[]; leftover: number } {
-  const fills = gaps.map(() => 0);
-  const caps = [...gaps];
-  let left = amount;
-  let active = gaps.map((gap, index) => (gap > 0 ? index : -1)).filter((index) => index >= 0);
-  while (left > 0 && active.length > 0) {
-    const shares = splitCents(left, active.map((index) => caps[index]));
-    let spent = 0;
-    const next: number[] = [];
-    active.forEach((index, j) => {
-      const give = Math.min(shares[j], caps[index]);
-      fills[index] += give;
-      caps[index] -= give;
-      spent += give;
-      if (caps[index] > 0) next.push(index);
-    });
-    if (spent === 0) break;
-    left -= spent;
-    active = next;
+function gapPriority(gaps: number[], targets: number[], flagged: boolean[]): number[] {
+  return gaps.map((gap, index) => ({ gap, index }))
+    .filter(({ gap }) => gap > 0)
+    .sort((a, b) => {
+      const flaggedDiff = Number(flagged[b.index]) - Number(flagged[a.index]);
+      if (flaggedDiff !== 0) return flaggedDiff;
+      return b.gap / targets[b.index] - a.gap / targets[a.index] || a.index - b.index;
+    })
+    .map(({ index }) => index);
+}
+
+/**
+ * Enche os gaps na ordem de prioridade; cada item recebe até zerar o déficit.
+ * Consome `gaps` (resta o déficit não coberto) e retorna quanto foi alocado.
+ */
+function fillInOrder(trades: number[], gaps: number[], order: number[], budget: number): number {
+  let left = budget;
+  for (const index of order) {
+    if (left === 0) break;
+    const give = Math.min(gaps[index], left);
+    trades[index] += give;
+    gaps[index] -= give;
+    left -= give;
   }
-  return { fills, leftover: left };
+  return budget - left;
 }
 
 export function simulateRebalance({
@@ -165,20 +169,13 @@ export function simulateRebalance({
   } else {
     const gaps = targets.map((target, i) => Math.max(0, target - balances[i]));
     const flagged = targets.map((_, i) => needsAction(balances[i], total, weights[i]));
-    const remaining = [...gaps];
+    // Preenche um déficit por vez, na ordem de prioridade: cada aporte sugerido
+    // zera o déficit do ativo; só o primeiro da fila que o orçamento não cobre
+    // recebe aporte parcial. Evita "pingar" valores que não mudam o cenário.
     trades = balances.map(() => 0);
-    let left = budget;
-    // Prioriza categorias fora da tolerância; o que sobrar cobre os demais déficits,
-    // sempre limitado ao que falta para o alvo. Só sobra para a meta proporcional
-    // quando nenhuma categoria está abaixo do alvo (todas atingidas).
-    for (const onlyFlagged of [true, false]) {
-      if (left === 0) break;
-      const pool = remaining.map((gap, i) => (!onlyFlagged || flagged[i] ? gap : 0));
-      const { fills, leftover } = fillGaps(left, pool);
-      trades = trades.map((trade, i) => trade + fills[i]);
-      for (let i = 0; i < remaining.length; i++) remaining[i] -= fills[i];
-      left = leftover;
-    }
+    const left = budget - fillInOrder(trades, gaps, gapPriority(gaps, targets, flagged), budget);
+    // Sobra só existe quando todos os déficits foram zerados: distribui pelas
+    // metas para manter as proporções.
     if (left > 0) {
       const extra = splitCents(left, weights);
       trades = trades.map((trade, i) => trade + extra[i]);
@@ -339,6 +336,77 @@ export function assetTargetCategories(
   return assets.map((asset) => ({ key: asset.key, balance: asset.balance, targetPct: effective.get(asset.key) ?? 0 }));
 }
 
+/**
+ * Plano de aporte hierárquico: primeiro cobre o déficit de cada classe (contra
+ * as metas por classe) em ordem de prioridade — fora da tolerância antes, depois
+ * o maior desvio relativo; dentro da classe, rateia pelos ativos seguindo os
+ * mesmos critérios. Déficits internos de classes já na meta só recebem a sobra,
+ * e nunca além do que falta para a meta do ativo. O que não couber em déficit
+ * algum é repartido pelas metas.
+ */
+function planGroupContribution(
+  assets: RebalanceAsset[],
+  categories: RebalanceCategory[],
+  dimension: RebalanceDimension,
+  groupTargets: Record<string, number>,
+  contribution: number,
+): Record<string, number> {
+  const budget = toCents(contribution);
+  const balances = categories.map((category) => toCents(category.balance));
+  const total = balances.reduce((sum, value) => sum + value, 0);
+  const finalTotal = total + budget;
+  if (budget === 0 || finalTotal === 0) return {};
+  const targetSum = categories.reduce((sum, category) => sum + category.targetPct, 0);
+  const weights = categories.map((category) => category.targetPct / targetSum);
+  const memberTargets = splitCents(finalTotal, weights);
+  const memberGaps = memberTargets.map((target, i) => Math.max(0, target - balances[i]));
+  const memberFlagged = memberTargets.map((_, i) => needsAction(balances[i], total, weights[i]));
+  const memberOrder = gapPriority(memberGaps, memberTargets, memberFlagged);
+
+  const groupField = dimension === "productType" ? "productType" : "assetClass";
+  const groups = new Map<string, number[]>();
+  assets.forEach((asset, i) => {
+    const members = groups.get(asset[groupField]) ?? [];
+    members.push(i);
+    groups.set(asset[groupField], members);
+  });
+  const groupTargetSum = Object.values(groupTargets).reduce((sum, value) => sum + value, 0);
+  const groupWeightsValid = validAllocation(Object.values(groupTargets));
+  const rankedGroups = [...groups.values()].map((memberIdx) => {
+    const balance = memberIdx.reduce((sum, i) => sum + balances[i], 0);
+    const weight = groupWeightsValid
+      ? (groupTargets[assets[memberIdx[0]][groupField]] ?? 0) / groupTargetSum
+      : memberIdx.reduce((sum, i) => sum + weights[i], 0);
+    const target = Math.floor(weight * finalTotal);
+    return {
+      members: new Set(memberIdx),
+      gap: Math.max(0, target - balance),
+      target,
+      flagged: needsAction(balance, total, weight),
+    };
+  }).filter((group) => group.gap > 0)
+    .sort((a, b) => Number(b.flagged) - Number(a.flagged) || b.gap / b.target - a.gap / a.target);
+
+  const trades = balances.map(() => 0);
+  let left = budget;
+  // 1. classes abaixo da meta, por prioridade; dentro delas, ativos por prioridade
+  for (const group of rankedGroups) {
+    if (left === 0) break;
+    const order = memberOrder.filter((index) => group.members.has(index));
+    left -= fillInOrder(trades, memberGaps, order, Math.min(group.gap, left));
+  }
+  // 2. déficits residuais de ativos em classes já na meta
+  left -= fillInOrder(trades, memberGaps, memberOrder, left);
+  // 3. tudo na meta: reparte a sobra pelas metas para manter as proporções
+  if (left > 0) {
+    const extra = splitCents(left, weights);
+    extra.forEach((value, i) => trades[i] += value);
+  }
+  return Object.fromEntries(
+    assets.map((asset, i) => [asset.key, trades[i] / 100] as const).filter(([, value]) => value > 0),
+  );
+}
+
 export function simulateAssetRebalance({
   assets, dimension, targets, contribution, mode, manualContributions, manualDimension = dimension,
 }: AssetRebalanceInput): RebalanceResult {
@@ -361,7 +429,10 @@ export function simulateAssetRebalance({
   if (mode === "contribution" && manual && assets.some((asset) => asset.intent === "exit" && (manual[asset.key] ?? 0) > 0)) {
     throw new Error("Um ativo marcado para saída não pode receber aportes. Remova o aporte ou altere a intenção para Manter.");
   }
-  const ideal = simulateRebalance({ categories, contribution, mode, manualContributions: manual });
+  const ideal = simulateRebalance({ categories, contribution, mode,
+    manualContributions: manual ?? (mode === "contribution"
+      ? planGroupContribution(assets, categories, dimension, targets, contribution)
+      : undefined) });
   const locked = new Set(assets.filter((asset) => asset.intent === "exit" && !asset.allowExitSale).map((asset) => asset.key));
   if (mode !== "full" || locked.size === 0) return ideal;
   const available = simulateRebalance({ categories: categories.filter((row) => !locked.has(row.key)), contribution, mode });

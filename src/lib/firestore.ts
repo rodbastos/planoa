@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  deleteField,
   getDocs,
   onSnapshot,
   orderBy,
@@ -16,6 +17,7 @@ import type {
   ImportMeta,
   InstrumentRule,
   Position,
+  RebalancePreference,
   RetirementPlan,
   Targets,
   WealthYear,
@@ -39,20 +41,30 @@ export function rulesRef(uid: string) {
   return collection(userRef(uid), "instrumentRules");
 }
 
+function validShare(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100);
+}
+
 export function subscribeRebalancePreferences(
   uid: string,
-  cb: (preferences: Record<string, AssetIntent>) => void,
+  cb: (preferences: Record<string, RebalancePreference>) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
   return onSnapshot(collection(userRef(uid), "rebalancePreferences"), (snap) => {
-    const entries: [string, AssetIntent][] = [];
+    const entries: [string, RebalancePreference][] = [];
     for (const document of snap.docs) {
       const data = document.data();
-      if (typeof data.key !== "string" || (data.intent !== "keep" && data.intent !== "exit")) {
+      if (typeof data.key !== "string"
+        || (data.intent !== undefined && data.intent !== "keep" && data.intent !== "exit")
+        || !validShare(data.classSharePct) || !validShare(data.productSharePct)) {
         onError(new Error("Uma preferência de rebalanceamento é inválida. Não foi possível aplicar suas intenções com segurança."));
         return;
       }
-      entries.push([data.key, data.intent]);
+      const preference: RebalancePreference = {};
+      if (data.intent !== undefined) preference.intent = data.intent;
+      if (data.classSharePct !== undefined) preference.classSharePct = data.classSharePct;
+      if (data.productSharePct !== undefined) preference.productSharePct = data.productSharePct;
+      entries.push([data.key, preference]);
     }
     cb(Object.fromEntries(entries));
   }, onError);
@@ -61,6 +73,24 @@ export function subscribeRebalancePreferences(
 export async function saveRebalancePreference(uid: string, key: string, intent: AssetIntent): Promise<void> {
   if (!uid || !key || (intent !== "keep" && intent !== "exit")) throw new Error("Preferência de rebalanceamento inválida.");
   await setDoc(doc(collection(userRef(uid), "rebalancePreferences"), encodeURIComponent(key)), { key, intent }, { merge: true });
+}
+
+/** Salva o peso interno manual do ativo na classe/produto. `null` remove o peso salvo. */
+export async function saveRebalanceShares(
+  uid: string,
+  key: string,
+  shares: { classSharePct?: number | null; productSharePct?: number | null },
+): Promise<void> {
+  if (!uid || !key) throw new Error("Preferência de rebalanceamento inválida.");
+  const data: Record<string, unknown> = { key };
+  for (const [field, value] of Object.entries(shares)) {
+    if (value === undefined) continue;
+    if (value === null) { data[field] = deleteField(); continue; }
+    if (!validShare(value)) throw new Error("O peso interno deve estar entre 0% e 100%.");
+    data[field] = value;
+  }
+  if (Object.keys(data).length === 1) return;
+  await setDoc(doc(collection(userRef(uid), "rebalancePreferences"), encodeURIComponent(key)), data, { merge: true });
 }
 
 export function targetsRef(uid: string) {

@@ -170,6 +170,33 @@ describe("rebalanceamento por ativo", () => {
   });
 });
 
+describe("aporte hierárquico por classe", () => {
+  it("cobre primeiro o gap da classe antes do déficit interno dos ativos", () => {
+    const rows = assets();
+    rows[0].classSharePct = 20;
+    rows[1].classSharePct = 80;
+    const result = simulateAssetRebalance({
+      assets: rows, dimension: "assetClass",
+      targets: { CDI: 75, RV: 25 }, contribution: 2000, mode: "contribution",
+    });
+    // RV está 33% abaixo da meta de classe e é coberta primeiro: ação fecha a meta.
+    // A sobra vai para a CDI, única outra classe abaixo do alvo.
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 1000, 1000]);
+    expect(result.rows[2].afterBRL).toBe(result.rows[2].targetBRL);
+  });
+
+  it("não alimenta membro de classe acima da meta enquanto outra classe está abaixo", () => {
+    const rows = assets();
+    rows[0].classSharePct = 20; // cdb1 fica acima da sua meta interna
+    rows[1].classSharePct = 80; // cdb2 tem déficit interno, mas a classe está acima do alvo
+    const result = simulateAssetRebalance({
+      assets: rows, dimension: "assetClass",
+      targets: { CDI: 50, RV: 50 }, contribution: 2000, mode: "contribution",
+    });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 0, 2000]);
+  });
+});
+
 describe("meta manual por ativo", () => {
   it("fixa a meta do ativo e redimensiona as demais sugestões proporcionalmente", () => {
     const rows = assets();
@@ -319,7 +346,7 @@ describe("simulateRebalance", () => {
     expect(result.minimumContribution).toBe(6000);
   });
 
-  it("distribui proporcionalmente aos déficits calculados sobre o total após aporte", () => {
+  it("concentra o aporte no maior desvio relativo ao alvo antes de partir para o próximo", () => {
     const result = simulateRebalance({
       ...base,
       categories: [
@@ -328,7 +355,21 @@ describe("simulateRebalance", () => {
         { key: "C", balance: 1000, targetPct: 20 },
       ],
     });
-    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 1300, 700]);
+    // B está 72% abaixo do alvo e recebe o aporte inteiro; C (58% abaixo) fica para o próximo.
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 2000, 0]);
+  });
+
+  it("zera um déficit de cada vez em vez de distribuir aportes minúsculos", () => {
+    const result = simulateRebalance({ ...base, contribution: 5000, categories: [
+      { key: "No alvo", balance: 9000, targetPct: 60 },
+      { key: "Longe", balance: 500, targetPct: 30 },
+      { key: "Perto", balance: 500, targetPct: 10 },
+    ] });
+    // finalTotal 15000 → metas 9000/4500/1500; gaps: 0, 4000, 1000.
+    // Longe (89% abaixo) e Perto (67% abaixo) fecham a meta; quem está no alvo não recebe nada.
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 4000, 1000]);
+    expect(result.rows[1].afterBRL).toBe(result.rows[1].targetBRL);
+    expect(result.distanceAfter).toBe(0);
   });
 
   it("atinge o alvo apenas com aporte quando há dinheiro suficiente", () => {
