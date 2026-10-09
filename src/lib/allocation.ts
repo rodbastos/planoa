@@ -38,6 +38,13 @@ export const REBALANCE_TOLERANCE = 0.2;
 /** diferença em R$ abaixo desta fração do patrimônio total é residual (0,25%) */
 export const RESIDUAL_TOLERANCE = 0.0025;
 
+export function allocationNeedsAction(balance: number, total: number, targetWeight: number): boolean {
+  const target = total * targetWeight;
+  const difference = Math.abs(balance - target);
+  return difference > Math.max(1, RESIDUAL_TOLERANCE * total) &&
+    (target === 0 || difference / target > REBALANCE_TOLERANCE);
+}
+
 /** Compara alocação atual vs carteira ideal */
 export function compareWithTargets(
   positions: Position[],
@@ -70,9 +77,7 @@ export function compareWithTargets(
       targetBRL,
       deltaBRL,
       deviation,
-      needsAction:
-        Math.abs(deviation) > REBALANCE_TOLERANCE &&
-        Math.abs(deltaBRL) > Math.max(1, RESIDUAL_TOLERANCE * total),
+      needsAction: allocationNeedsAction(currentBRL, total, targetPct),
     });
   }
   if (order) {

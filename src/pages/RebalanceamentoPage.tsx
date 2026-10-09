@@ -12,9 +12,10 @@ import { Tabs } from "../components/ui/Tabs";
 import { usePortfolio, useRebalancePreferences, useTargets } from "../hooks/usePortfolio";
 import { importDate } from "../hooks/useImports";
 import { categoryColor, CHART } from "../lib/colors";
+import { allocationNeedsAction, REBALANCE_TOLERANCE, RESIDUAL_TOLERANCE } from "../lib/allocation";
 import { formatBRL, formatDate, formatDateISO, formatPct } from "../lib/format";
 import {
-  assetTargetCategories, createRebalanceAssets, rebalancePreferenceKey, simulateAssetRebalance, summarizeMetrics, summarizeRebalance, validAllocation,
+  applyExitShares, assetTargetCategories, createRebalanceAssets, rebalancePreferenceKey, simulateAssetRebalance, summarizeMetrics, summarizeRebalance, validAllocation,
   type RebalanceAsset, type RebalanceDimension, type RebalanceMode, type RebalanceResult, type RebalanceRow,
 } from "../lib/rebalance";
 import { ASSET_CLASSES, PRODUCT_TYPES, type AssetIntent, type Position, type RebalancePreference, type RebalanceSharePatch, type Targets } from "../lib/types";
@@ -121,14 +122,14 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   const [savingShares, setSavingShares] = useState(false);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
-  const assets = useMemo(() => assetDraft.map((asset): RebalanceAsset => {
+  const assets = useMemo(() => applyExitShares(assetDraft.map((asset): RebalanceAsset => {
     const pref = asset.preferenceKey ? preferences[asset.preferenceKey] : undefined;
     const draft = asset.preferenceKey ? shareDraft[asset.preferenceKey] : undefined;
     return { ...asset, intent: pref?.intent ?? "keep",
       classSharePct: draft?.classSharePct !== undefined ? draft.classSharePct ?? asset.classSharePct : pref?.classSharePct ?? asset.classSharePct,
       productSharePct: draft?.productSharePct !== undefined ? draft.productSharePct ?? asset.productSharePct : pref?.productSharePct ?? asset.productSharePct,
     };
-  }), [assetDraft, preferences, shareDraft]);
+  })), [assetDraft, preferences, shareDraft]);
   const [savingIntent, setSavingIntent] = useState<string | null>(null);
   const [failedIntent, setFailedIntent] = useState<{ key: string; intent: AssetIntent; message: string } | null>(null);
   const classTargets = savedTargets.byAssetClass;
@@ -150,7 +151,10 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   const invalidShares = (["assetClass", "productType"] as const).some((groupField) => {
     const field = groupField === "assetClass" ? "classSharePct" : "productSharePct";
     const changedGroups = new Set(assets.filter((asset) => asset.preferenceKey && shareDraft[asset.preferenceKey]?.[field] !== undefined).map((asset) => asset[groupField]));
-    return [...changedGroups].some((key) => !validAllocation(assets.filter((asset) => asset[groupField] === key).map((asset) => asset[field])));
+    return [...changedGroups].some((key) => {
+      const members = assets.filter((asset) => asset[groupField] === key);
+      return members.some((asset) => asset.intent !== "exit") && !validAllocation(members.map((asset) => asset[field]));
+    });
   });
   const manualTotal = Object.values(manual).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
   const classRank = new Map<string, number>(ASSET_CLASSES.map((key, index) => [key, index]));
@@ -185,6 +189,8 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   }, [assets, dimension, targets, contribution, mode, manualMode, manual]);
 
   const rowByKey = useMemo(() => new Map(result?.rows.map((row) => [row.key, row]) ?? []), [result]);
+  const groupPlan = useMemo(() => new Map(result ? summarizeRebalance(result, assets, dimension).map((row) => [row.key, row]) : []), [result, assets, dimension]);
+  const totalBalance = assets.reduce((sum, asset) => sum + asset.balance, 0);
 
   async function changeIntent(key: string, intent: AssetIntent) {
     setSavingIntent(key);
@@ -207,7 +213,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   function updateAsset(key: string, patch: Partial<RebalanceAsset>) {
     if (patch[shareField] !== undefined) {
       const edited = assets.find((asset) => asset.key === key);
-      if (!edited) return;
+      if (!edited || edited.intent === "exit") return;
       setShareDraft((current) => {
         const next = { ...current };
         for (const asset of assets.filter((asset) => asset[dimension] === edited[dimension])) {
@@ -229,7 +235,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   }
 
   async function saveDistribution() {
-    if (!dirtyShares || savingShares || invalidShares) return;
+    if (!dirtyShares || savingShares || savingIntent || invalidShares) return;
     setSavingShares(true);
     setShareMessage(null);
     setShareError(null);
@@ -320,7 +326,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
           )}
           <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
             {mode === "contribution"
-              ? "A sugestão zera um déficit por vez, começando por quem está mais abaixo da meta — sem aportes minúsculos que não chegam ao alvo."
+              ? `Prioriza classes com desvio abaixo da meta maior que ${pctPlaceholder(REBALANCE_TOLERANCE)}% e diferença maior que ${pctPlaceholder(RESIDUAL_TOLERANCE)}% do patrimônio (mínimo de R$ 1). Reduz os maiores gaps da carteira; a sobra cobre déficits menores. Dentro da classe, completa um ativo por vez.`
               : "O plano busca a meta de cada ativo com compras e resgates; o aporte cobre a diferença. Nenhuma ordem é executada."}
           </p>
         </CardContent>
@@ -341,11 +347,19 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
               const members = assets.filter((asset) => asset[dimension] === key);
               const sum = members.reduce((acc, asset) => acc + asset[shareField], 0);
               const valid = validAllocation(members.map((asset) => asset[shareField]));
+              const balance = members.reduce((acc, asset) => acc + asset.balance, 0);
+              const weight = (targets[key] ?? 0) / 100;
+              const below = balance < totalBalance * weight;
+              const priority = below && allocationNeedsAction(balance, totalBalance, weight);
               return <div key={key} className="rounded-lg border border-border px-3 py-2 text-xs">
-                <p className="font-medium">{key} · Meta na carteira: {formatPct((targets[key] ?? 0) / 100)}</p>
+                <p className="font-medium">{key} · Meta na carteira: {formatPct(weight)}</p>
+                {mode === "contribution" && <p className={cn("mt-1", priority ? "font-medium text-accent" : "text-muted-foreground")}>
+                  {priority ? "Déficit significativo · prioridade" : below ? "Déficit dentro da tolerância · recebe sobra" : "Sem déficit antes do aporte"}
+                  {result && !savingIntent && !failedIntent && ` · ${formatBRL(groupPlan.get(key)?.purchases ?? 0)} no plano`}
+                </p>}
                 <p className={cn("mt-1", valid ? "text-muted-foreground" : "text-destructive")}>
                   {members.length} ativos · Distribuição interna: {formatPct(sum / 100)} / 100%
-                  {!members.length ? " · adicione um ativo" : !valid ? " · ajuste para somar 100%" : ""}
+                  {!members.length ? " · adicione um ativo" : members.every((asset) => asset.intent === "exit") ? " · sem ativo para receber aportes" : !valid ? " · ajuste para somar 100%" : ""}
                 </p>
               </div>;
             })}
@@ -360,7 +374,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
             : `${assets.filter((asset) => !asset.future).length} posições · ${assets.filter((asset) => asset.future).length} ativos futuros · Manter ou sair é salvo na conta.`}
           action={<div className="flex flex-wrap gap-2">
             <Button size="sm" variant="ghost" disabled={savingShares} onClick={resetShares}>Restaurar sugestão</Button>
-            <Button size="sm" disabled={!dirtyShares || savingShares || invalidShares} onClick={saveDistribution}>{savingShares ? "Salvando distribuição…" : "Salvar distribuição"}</Button>
+            <Button size="sm" disabled={!dirtyShares || savingShares || savingIntent !== null || invalidShares} onClick={saveDistribution}>{savingShares ? "Salvando distribuição…" : "Salvar distribuição"}</Button>
             <Button size="sm" variant="outline" disabled={savingShares} aria-expanded={showAddAsset} onClick={() => setShowAddAsset((value) => !value)}><Plus className="h-4 w-4" /> Adicionar ativo</Button>
           </div>} />
         <CardContent className="space-y-4">
@@ -467,13 +481,13 @@ function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manu
       <td className="px-3 py-3 align-top">
         <Input aria-label={`Meta de ${asset.name} dentro ${dimension === "productType" ? "do produto" : "da classe"} (%)`}
           aria-invalid={!Number.isFinite(asset[shareField]) || asset[shareField] < 0 || asset[shareField] > 100}
-          type="number" inputMode="decimal" min={0} max={100} step="0.01" disabled={saving}
+          type="number" inputMode="decimal" min={0} max={100} step="0.01" disabled={saving || asset.intent === "exit"}
           value={Number.isFinite(asset[shareField]) ? asset[shareField] : ""} placeholder={pctPlaceholder(suggestedPct !== undefined ? suggestedPct / 100 : undefined)}
           onChange={(event) => onUpdate(asset.key, { [shareField]: event.target.value === "" ? 0 : event.target.valueAsNumber })}
           title="Percentual dentro desta classe ou produto, não da carteira. Edite e clique em Salvar distribuição."
           className={cn("ml-auto h-9 w-24 text-right", (shareSaved || shareDirty) && "border-accent")} />
-        <span className="mt-1 block text-right text-[11px] text-muted-foreground">{shareDirty ? "Não salvo" : shareSaved ? "Salvo na conta" : "Sugerido pelo saldo"}</span>
-        {asset.intent === "exit" && <span className="mt-1 block text-right text-[11px] text-muted-foreground">Meta efetiva: 0% · fatia redistribuída</span>}
+        <span className="mt-1 block text-right text-[11px] text-muted-foreground">{asset.intent === "exit" ? "Zerada pela intenção de saída" : shareDirty ? "Não salvo" : shareSaved ? "Salvo na conta" : "Sugerido pelo saldo"}</span>
+        {asset.intent === "exit" && <span className="mt-1 block text-right text-[11px] text-muted-foreground">Meta efetiva: 0% · sem novos aportes</span>}
       </td>
       <td className="px-3 py-3 text-right align-top">
         {manualMode && mode === "contribution"

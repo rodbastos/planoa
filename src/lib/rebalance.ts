@@ -1,4 +1,4 @@
-import { REBALANCE_TOLERANCE, RESIDUAL_TOLERANCE } from "./allocation";
+import { allocationNeedsAction } from "./allocation";
 import { instrumentKey } from "./classification";
 import type { AssetIntent, Position } from "./types";
 
@@ -99,10 +99,7 @@ function splitCents(total: number, weights: number[]): number[] {
 }
 
 function needsAction(balance: number, total: number, weight: number): boolean {
-  const target = total * weight;
-  const difference = Math.abs(balance - target);
-  return difference > Math.max(100, total * RESIDUAL_TOLERANCE) &&
-    (target === 0 || difference / target > REBALANCE_TOLERANCE);
+  return allocationNeedsAction(balance / 100, total / 100, weight);
 }
 
 /**
@@ -253,12 +250,31 @@ export function createRebalanceAssets(positions: Position[], classTargets: Recor
   return assets;
 }
 
+export function applyExitShares(assets: RebalanceAsset[]): RebalanceAsset[] {
+  const effective = assets.map((asset) => ({ ...asset }));
+  for (const dimension of ["assetClass", "productType"] as const) {
+    const field = dimension === "assetClass" ? "classSharePct" : "productSharePct";
+    for (const key of new Set(effective.map((asset) => asset[dimension]))) {
+      const members = effective.filter((asset) => asset[dimension] === key);
+      const shares = members.map((asset) => asset[field]);
+      const redistribute = members.some((asset) => asset.intent === "exit" && asset[field] > 0) && validAllocation(shares);
+      members.filter((asset) => asset.intent === "exit").forEach((asset) => { asset[field] = 0; });
+      const kept = members.filter((asset) => asset.intent !== "exit");
+      if (!redistribute || !kept.length) continue;
+      const weights = kept.map((asset) => asset[field]);
+      const allocated = splitCents(10000, weights.some((value) => value > 0) ? weights : kept.map(() => 1));
+      kept.forEach((asset, index) => { asset[field] = allocated[index] / 100; });
+    }
+  }
+  return effective;
+}
+
 function groupShares(assets: RebalanceAsset[], dimension: "assetClass" | "productType", key: string): number[] {
   if (!assets.length) throw new Error(`Adicione um ativo existente ou futuro para a categoria ${key}, ou revise sua meta.`);
   const shares = assets.map((asset) => dimension === "assetClass" ? asset.classSharePct : asset.productSharePct);
-  if (!validAllocation(shares)) throw new Error(`Os pesos dos ativos em ${key} devem estar entre 0% e 100% e somar 100%.`);
   const eligible = shares.map((share, i) => assets[i].intent === "exit" ? 0 : share);
   if (!eligible.some((share) => share > 0)) throw new Error(`A categoria ${key} não tem ativo elegível para receber recursos. Inclua um ativo, revise os pesos ou a meta da categoria.`);
+  if (!validAllocation(shares)) throw new Error(`Os pesos dos ativos em ${key} devem estar entre 0% e 100% e somar 100%.`);
   return eligible;
 }
 
@@ -336,6 +352,68 @@ export function assetTargetCategories(
   return assets.map((asset) => ({ key: asset.key, balance: asset.balance, targetPct: effective.get(asset.key) ?? 0 }));
 }
 
+function minimizeSquaredGaps(budget: number, gaps: number[], capacities: number[]): number[] {
+  const spend = Math.min(budget, capacities.reduce((sum, value) => sum + value, 0));
+  if (spend === 0) return gaps.map(() => 0);
+  let low = 0;
+  let high = Math.max(...gaps);
+  while (low < high) {
+    const level = low + Math.floor((high - low) / 2);
+    const used = gaps.reduce((sum, gap, i) => sum + Math.min(capacities[i], Math.max(0, gap - level)), 0);
+    if (used > spend) low = level + 1; else high = level;
+  }
+  const amounts = gaps.map((gap, i) => Math.min(capacities[i], Math.max(0, gap - low)));
+  const remaining = spend - amounts.reduce((sum, value) => sum + value, 0);
+  const ranked = gaps.map((gap, index) => ({ index, remaining: gap - amounts[index] }))
+    .filter(({ index }) => amounts[index] < capacities[index])
+    .sort((a, b) => b.remaining - a.remaining || a.index - b.index);
+  for (let i = 0; i < remaining; i++) amounts[ranked[i].index]++;
+  return amounts;
+}
+
+function planClassContribution(
+  assets: RebalanceAsset[], categories: RebalanceCategory[], dimension: "assetClass" | "productType",
+  groupTargets: Record<string, number>, contribution: number,
+): Record<string, number> {
+  const budget = toCents(contribution);
+  if (budget === 0) return {};
+  const balances = categories.map((category) => toCents(category.balance));
+  const total = balances.reduce((sum, value) => sum + value, 0);
+  const finalTotal = total + budget;
+  if (!Number.isSafeInteger(finalTotal)) throw new Error("O total excede o limite de precisão monetária.");
+  const targetSum = categories.reduce((sum, category) => sum + category.targetPct, 0);
+  const weights = categories.map((category) => category.targetPct / targetSum);
+  const memberTargets = splitCents(finalTotal, weights);
+  const memberGaps = memberTargets.map((target, i) => Math.max(0, target - balances[i]));
+  const memberOrder = gapPriority(memberGaps, memberTargets, balances.map((balance, i) => needsAction(balance, total, weights[i])));
+  const grouped = new Map<string, number[]>();
+  assets.forEach((asset, i) => {
+    const members = grouped.get(asset[dimension]) ?? [];
+    members.push(i);
+    grouped.set(asset[dimension], members);
+  });
+  const groups = [...grouped.entries()].map(([key, members]) => {
+    const balance = members.reduce((sum, i) => sum + balances[i], 0);
+    const target = members.reduce((sum, i) => sum + memberTargets[i], 0);
+    const weight = (groupTargets[key] ?? 0) / 100;
+    const gap = Math.max(0, target - balance);
+    return {
+      members: new Set(members), gap,
+      capacity: Math.min(gap, members.reduce((sum, i) => sum + memberGaps[i], 0)),
+      priority: balance < total * weight && needsAction(balance, total, weight),
+    };
+  });
+  const gaps = groups.map((group) => group.gap);
+  const first = minimizeSquaredGaps(budget, gaps, groups.map((group) => group.priority ? group.capacity : 0));
+  const left = budget - first.reduce((sum, value) => sum + value, 0);
+  const extra = minimizeSquaredGaps(left, gaps.map((gap, i) => gap - first[i]), groups.map((group, i) => group.capacity - first[i]));
+  const trades = balances.map(() => 0);
+  groups.forEach((group, i) => {
+    fillInOrder(trades, memberGaps, memberOrder.filter((index) => group.members.has(index)), first[i] + extra[i]);
+  });
+  return Object.fromEntries(assets.map((asset, i) => [asset.key, trades[i] / 100] as const).filter(([, value]) => value > 0));
+}
+
 /**
  * Plano de aporte hierárquico: primeiro cobre o déficit de cada classe (contra
  * as metas por classe) em ordem de prioridade — fora da tolerância antes, depois
@@ -351,6 +429,7 @@ function planGroupContribution(
   groupTargets: Record<string, number>,
   contribution: number,
 ): Record<string, number> {
+  if (dimension !== "asset") return planClassContribution(assets, categories, dimension, groupTargets, contribution);
   const budget = toCents(contribution);
   const balances = categories.map((category) => toCents(category.balance));
   const total = balances.reduce((sum, value) => sum + value, 0);
@@ -363,7 +442,7 @@ function planGroupContribution(
   const memberFlagged = memberTargets.map((_, i) => needsAction(balances[i], total, weights[i]));
   const memberOrder = gapPriority(memberGaps, memberTargets, memberFlagged);
 
-  const groupField = dimension === "productType" ? "productType" : "assetClass";
+  const groupField = "assetClass";
   const groups = new Map<string, number[]>();
   assets.forEach((asset, i) => {
     const members = groups.get(asset[groupField]) ?? [];

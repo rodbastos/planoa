@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyExitShares,
   assetTargetCategories,
   createRebalanceAssets,
   rebalancePreferenceKey,
@@ -11,6 +12,7 @@ import {
   type RebalanceInput,
 } from "../rebalance";
 import type { Position } from "../types";
+import { compareWithTargets } from "../allocation";
 
 const base: RebalanceInput = {
   categories: [
@@ -171,6 +173,127 @@ describe("rebalanceamento por ativo", () => {
 });
 
 describe("aporte hierárquico por classe", () => {
+  const scenario = (balances: number[], weights: number[]) => {
+    const targets = Object.fromEntries(weights.map((value, index) => [`Classe ${index}`, value]));
+    const holdings = balances.map((balance, index): Position => ({
+      name: `Ativo ${index}`, assetClass: `Classe ${index}`, productType: `Classe ${index}`,
+      balance, sourceSection: "Teste", allocationPct: 0,
+    }));
+    return { assets: createRebalanceAssets(holdings, targets), targets, holdings };
+  };
+
+  it.each(["assetClass", "productType"] as const)("divide o aporte em %s para reduzir os maiores gaps globais", (dimension) => {
+    const input = scenario([8000, 1000, 1000], [50, 30, 20]);
+    const result = simulateAssetRebalance({ ...input, dimension, contribution: 2000, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 1600, 400]);
+    expect(result.rows[1].targetBRL - result.rows[1].afterBRL).toBe(1000);
+    expect(result.rows[2].targetBRL - result.rows[2].afterBRL).toBe(1000);
+    expect(result.remainingCash).toBe(0);
+  });
+
+  it("não privilegia uma classe pequena apenas pelo desvio relativo", () => {
+    const input = scenario([9000, 900, 100], [60, 30, 10]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 1000, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 1000, 0]);
+  });
+
+  it("prioriza déficits significativos da Carteira Ideal e usa a sobra nos menores", () => {
+    const input = scenario([7800, 700, 1500], [80, 10, 10]);
+    const ideal = compareWithTargets(input.holdings, input.targets, "assetClass", Object.keys(input.targets));
+    expect(ideal.map((row) => row.deltaBRL > 0 && row.needsAction)).toEqual([false, true, false]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 2000, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([1500, 500, 0]);
+    expect(result.rows[1].afterBRL).toBe(result.rows[1].targetBRL);
+  });
+
+  it("exige os dois critérios: ignora déficits relativos grandes mas residuais", () => {
+    const input = scenario([7400, 100, 992500], [1, 0.1, 98.9]);
+    const ideal = compareWithTargets(input.holdings, input.targets, "assetClass", Object.keys(input.targets));
+    expect(ideal.map((row) => row.needsAction)).toEqual([true, false, false]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 1000, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([1000, 0, 0]);
+  });
+
+  it("equilibra os déficits menores quando nenhuma classe passa dos dois limites", () => {
+    const input = scenario([4900, 2800, 2300], [50, 30, 20]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 200, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([70, 130, 0]);
+  });
+
+  it("só divide entre ativos depois de reservar a parcela da classe", () => {
+    const input = scenario([8000, 1000, 1000], [50, 30, 20]);
+    const second = { ...input.assets[1], key: "segundo", name: "Segundo", balance: 500, originalBalance: 500, classSharePct: 50 };
+    input.assets[1] = { ...input.assets[1], balance: 500, originalBalance: 500, classSharePct: 50 };
+    const result = simulateAssetRebalance({ ...input, assets: [...input.assets, second], dimension: "assetClass", contribution: 2000, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 1300, 400, 300]);
+    expect(result.rows[1].afterBRL).toBe(result.rows[1].targetBRL);
+  });
+
+  it("preserva centavos e alcança o menor desvio quadrático entre as classes elegíveis", () => {
+    const input = scenario([80, 10, 10], [40, 30, 30]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 0.07, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 0.04, 0.03]);
+    const cost = result.rows.slice(1).reduce((sum, row) => sum + (cents(row.targetBRL) - cents(row.afterBRL)) ** 2, 0);
+    for (let first = 0; first <= 7; first++) {
+      const alternative = (cents(result.rows[1].targetBRL) - 1000 - first) ** 2 + (cents(result.rows[2].targetBRL) - 1000 - (7 - first)) ** 2;
+      expect(cost).toBeLessThanOrEqual(alternative);
+    }
+    expect(cents(result.purchases)).toBe(7);
+    expect(result.remainingCash).toBe(0);
+  });
+
+  it("mantém o menor erro quadrático em todas as divisões possíveis de pequenos aportes", () => {
+    const input = scenario([0.7, 0.1, 0.2], [40, 35, 25]);
+    for (let budget = 1; budget <= 15; budget++) {
+      const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: budget / 100, mode: "contribution" });
+      const cost = result.rows.reduce((sum, row) => sum + (cents(row.targetBRL) - cents(row.afterBRL)) ** 2, 0);
+      for (let a = 0; a <= budget; a++) {
+        for (let b = 0; b <= budget - a; b++) {
+          const trades = [a, b, budget - a - b];
+          const alternative = result.rows.reduce((sum, row, i) => sum + (cents(row.targetBRL) - cents(row.currentBRL) - trades[i]) ** 2, 0);
+          expect(cost).toBeLessThanOrEqual(alternative);
+        }
+      }
+      expect(cents(result.purchases)).toBe(budget);
+      expect(result.remainingCash).toBe(0);
+    }
+  });
+
+  it("conserva recursos e nunca ultrapassa a meta final nas classes que recebem aporte", () => {
+    for (let i = 0; i <= 100; i++) {
+      const input = scenario([i * 23.17, (100 - i) * 49.91, i * 0.03], [50, 30, 20]);
+      const contribution = i * 31.39;
+      const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution, mode: "contribution" });
+      expect(result.sales).toBe(0);
+      expect(cents(result.purchases) + cents(result.remainingCash)).toBe(cents(contribution));
+      expect(result.rows.reduce((sum, row) => sum + cents(row.afterBRL), cents(result.remainingCash))).toBe(cents(result.totalAfter));
+      expect(result.rows.every((row) => row.tradeBRL >= 0 && (row.tradeBRL === 0 || cents(row.afterBRL) <= cents(row.targetBRL)))).toBe(true);
+    }
+  });
+
+  it("distribui o primeiro aporte e preserva metas arredondadas sem deixar centavos soltos", () => {
+    const input = scenario([0, 0, 0], [33.33, 33.33, 33.33]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 100, mode: "contribution" });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([33.34, 33.33, 33.33]);
+    expect(result.remainingCash).toBe(0);
+  });
+
+  it("mantém aportes manuais explícitos sem substituí-los pela otimização", () => {
+    const input = scenario([8000, 1000, 1000], [50, 30, 20]);
+    const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 2000, mode: "contribution", manualDimension: "asset", manualContributions: { [input.assets[2].key]: 1500 } });
+    expect(result.rows.map((row) => row.tradeBRL)).toEqual([0, 0, 1500]);
+    expect(result.remainingCash).toBe(500);
+  });
+
+  it("usa exatamente os mesmos limites estritos da Carteira Ideal", () => {
+    for (const [balance, target, total] of [[400, 50, 1000], [399.99, 50, 1000], [0, 0.25, 1000], [0, 0.251, 1000], [0, 1, 100], [0, 1.01, 100], [2, 0, 100]]) {
+      const input = scenario([balance, total - balance], [target, 100 - target]);
+      const ideal = compareWithTargets(input.holdings, input.targets, "assetClass", Object.keys(input.targets));
+      const result = simulateAssetRebalance({ ...input, dimension: "assetClass", contribution: 0, mode: "contribution" });
+      expect(result.rows.map((row) => row.needsAction)).toEqual(ideal.map((row) => row.needsAction));
+    }
+  });
+
   it("cobre primeiro o gap da classe antes do déficit interno dos ativos", () => {
     const rows = assets();
     rows[0].classSharePct = 20;
@@ -237,6 +360,49 @@ describe("meta manual por ativo", () => {
 });
 
 describe("intenção de saída", () => {
+  it("zera metas internas em saída sem modificar a distribuição original", () => {
+    const rows = assets();
+    rows[0].intent = "exit";
+    const effective = applyExitShares(rows);
+    expect(effective.map((row) => row.classSharePct)).toEqual([0, 100, 100]);
+    expect(effective.map((row) => row.productSharePct)).toEqual([0, 100, 100]);
+    expect(rows.map((row) => row.classSharePct)).toEqual([75, 25, 100]);
+    expect(applyExitShares(effective)).toEqual(effective);
+  });
+
+  it("redistribui a fatia proporcionalmente e fecha 100% com arredondamento", () => {
+    const rows = assets();
+    rows[0].intent = "exit";
+    rows[0].classSharePct = 50;
+    rows[1].classSharePct = 25;
+    rows.push({ ...rows[1], key: "extra", classSharePct: 25 });
+    expect(applyExitShares(rows).map((row) => row.classSharePct)).toEqual([0, 50, 100, 50]);
+    rows[0].classSharePct = 99.97;
+    rows[1].classSharePct = 0.01;
+    rows[3].classSharePct = 0.02;
+    expect(applyExitShares(rows).map((row) => row.classSharePct)).toEqual([0, 33.33, 100, 66.67]);
+  });
+
+  it("redistribui igualmente quando os demais ativos não tinham participação", () => {
+    const rows = assets();
+    rows[0].intent = "exit";
+    rows[0].classSharePct = 100;
+    rows[1].classSharePct = 0;
+    expect(applyExitShares(rows).map((row) => row.classSharePct)).toEqual([0, 100, 100]);
+  });
+
+  it("não normaliza edição incompleta nem inventa destinatário numa classe toda em saída", () => {
+    const rows = assets();
+    rows[0].classSharePct = 0;
+    rows[0].intent = "exit";
+    rows[1].classSharePct = 80;
+    expect(applyExitShares(rows)[1].classSharePct).toBe(80);
+    rows[1].intent = "exit";
+    const effective = applyExitShares(rows);
+    expect(effective.map((row) => row.classSharePct)).toEqual([0, 0, 100]);
+    expect(() => assetTargetCategories(effective, "assetClass", groupTargets)).toThrow(/CDI.*elegível/);
+  });
+
   it("mantém a preferência entre importações sem confundir vencimentos diferentes", () => {
     const first = { ...positions[0], maturity: "2030-01-01" };
     const next = { ...first, id: "novo-id", balance: 7000 };

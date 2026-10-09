@@ -94,7 +94,11 @@ function mockPersistedShares(initial: Record<string, RebalancePreference> = {}) 
   let saved = initial;
   vi.mocked(useRebalancePreferences).mockImplementation(() => {
     const [stored, setStored] = useState(saved);
-    return { ...preferences, preferences: stored, saveShares: async (updates: Record<string, RebalanceSharePatch>) => {
+    return { ...preferences, preferences: stored, saveIntent: async (key, intent) => {
+      await preferences.saveIntent(key, intent);
+      saved = { ...saved, [key]: { ...saved[key], intent } };
+      setStored(saved);
+    }, saveShares: async (updates: Record<string, RebalanceSharePatch>) => {
       await preferences.saveShares(updates);
       saved = { ...saved };
       for (const [key, patch] of Object.entries(updates)) {
@@ -234,6 +238,66 @@ describe("RebalanceamentoPage", () => {
     expect(JSON.stringify(page.toJSON())).toContain("Distribuição salva na sua conta");
   });
 
+  it.each(["classes", "produtos"])("zera e bloqueia a meta em saída na visão de %s, inclusive após recarregar", async (view) => {
+    vi.mocked(usePortfolio).mockReturnValue(pairedPortfolio);
+    mockPersistedShares();
+    const simulation = vi.spyOn(rebalance, "simulateAssetRebalance");
+    const group = view === "classes" ? "da classe" : "do produto";
+    const page = mount(`/rebalanceamento?visao=${view}`);
+    const intentSelect = () => page.root.findAllByType("select").find((select) => select.props["aria-label"] === "Intenção para Título")!;
+    await act(async () => { await intentSelect().props.onChange({ target: { value: "exit" } }); });
+    expect(shareInput(page, "Título", group).props.value).toBe(0);
+    expect(shareInput(page, "Título", group).props.disabled).toBe(true);
+    expect(shareInput(page, "Outro título", group).props.value).toBe(100);
+    expect(shareInput(page, "Ação", group).props.value).toBe(100);
+    expect(preferences.saveIntent).toHaveBeenCalledWith(rebalancePreferenceKey(pairedPortfolio.positions[0]), "exit");
+    const input = simulation.mock.lastCall![0];
+    expect(rebalance.assetTargetCategories(input.assets, input.dimension, input.targets)[0].targetPct).toBe(0);
+    const reloaded = mount(`/rebalanceamento?visao=${view}`);
+    expect(shareInput(reloaded, "Título", group).props.value).toBe(0);
+    expect(shareInput(reloaded, "Outro título", group).props.value).toBe(100);
+    await act(async () => { await intentSelect().props.onChange({ target: { value: "keep" } }); });
+    expect(shareInput(page, "Título", group).props.value).toBe(75);
+    expect(shareInput(page, "Título", group).props.disabled).toBe(false);
+    expect(shareInput(page, "Outro título", group).props.value).toBe(25);
+  });
+
+  it("mantém metas anteriores quando falha ao salvar a intenção de saída", async () => {
+    vi.mocked(usePortfolio).mockReturnValue(pairedPortfolio);
+    mockPersistedShares();
+    preferences.saveIntent.mockRejectedValueOnce(new Error("Sem conexão"));
+    const page = mount();
+    const select = page.root.findAllByType("select").find((node) => node.props["aria-label"] === "Intenção para Título")!;
+    await act(async () => { await select.props.onChange({ target: { value: "exit" } }); });
+    expect(shareInput(page, "Título").props.value).toBe(75);
+    expect(shareInput(page, "Outro título").props.value).toBe(25);
+    expect(JSON.stringify(page.toJSON())).toContain("Não foi possível salvar a intenção");
+  });
+
+  it("mantém a meta de saída zerada ao editar, salvar e recarregar a distribuição", async () => {
+    vi.mocked(usePortfolio).mockReturnValue({ ...pairedPortfolio, positions: [
+      ...pairedPortfolio.positions, { ...pairedPortfolio.positions[1], name: "Terceiro título" },
+    ] });
+    mockPersistedShares({ [rebalancePreferenceKey(pairedPortfolio.positions[0])]: { intent: "exit" } });
+    const page = mount();
+    expect(shareInput(page, "Título").props.value).toBe(0);
+    expect(shareInput(page, "Outro título").props.value).toBe(50);
+    editShare(page, "Outro título", 60);
+    expect(button(page, "Salvar distribuição").props.disabled).toBe(true);
+    editShare(page, "Terceiro título", 40);
+    expect(button(page, "Salvar distribuição").props.disabled).toBe(false);
+    await act(async () => { await button(page, "Salvar distribuição").props.onClick(); });
+    expect(preferences.saveShares).toHaveBeenCalledWith({
+      [rebalancePreferenceKey(pairedPortfolio.positions[0])]: { classSharePct: 0 },
+      [rebalancePreferenceKey(pairedPortfolio.positions[1])]: { classSharePct: 60 },
+      [rebalancePreferenceKey({ name: "Terceiro título" })]: { classSharePct: 40 },
+    });
+    const reloaded = mount();
+    expect(shareInput(reloaded, "Título").props.value).toBe(0);
+    expect(shareInput(reloaded, "Outro título").props.value).toBe(60);
+    expect(shareInput(reloaded, "Terceiro título").props.value).toBe(40);
+  });
+
   it("restaura a sugestão somente após salvar e mantém a intenção", async () => {
     vi.mocked(usePortfolio).mockReturnValue(pairedPortfolio);
     mockPersistedShares({
@@ -242,12 +306,14 @@ describe("RebalanceamentoPage", () => {
     });
     const page = mount();
     act(() => button(page, "Restaurar sugestão").props.onClick());
-    expect(shareInput(page, "Título").props.value).toBe(75);
+    expect(shareInput(page, "Título").props.value).toBe(0);
+    expect(shareInput(page, "Outro título").props.value).toBe(100);
     expect(preferences.saveShares).not.toHaveBeenCalled();
     await act(async () => { await button(page, "Salvar distribuição").props.onClick(); });
     expect(preferences.saveShares).toHaveBeenCalledWith(Object.fromEntries(pairedPortfolio.positions.map((position) => [rebalancePreferenceKey(position), { classSharePct: null }])));
     const reloaded = mount();
-    expect(shareInput(reloaded, "Título").props.value).toBe(75);
+    expect(shareInput(reloaded, "Título").props.value).toBe(0);
+    expect(shareInput(reloaded, "Outro título").props.value).toBe(100);
     expect(reloaded.root.findAllByType("select").find((select) => select.props["aria-label"] === "Intenção para Título")!.props.value).toBe("exit");
   });
 
@@ -286,6 +352,15 @@ describe("RebalanceamentoPage", () => {
   it("aguarda as intenções antes de calcular qualquer sugestão", () => {
     vi.mocked(useRebalancePreferences).mockReturnValue({ ...preferences, loading: true });
     expect(render()).not.toContain("Cenário e plano");
+  });
+
+  it("explica os dois critérios da Carteira Ideal e separa as classes prioritárias", () => {
+    const html = render();
+    expect(html).toContain("maior que 20%");
+    expect(html).toContain("maior que 0,25% do patrimônio");
+    expect(html).toContain("Déficit significativo · prioridade");
+    expect(html).toContain("Sem déficit antes do aporte");
+    expect(html).toContain("a sobra cobre déficits menores");
   });
 
   it("mostra a simulação com a carteira e as metas por classe", () => {
