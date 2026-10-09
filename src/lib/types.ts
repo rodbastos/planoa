@@ -88,6 +88,8 @@ export interface RebalancePreference {
   productSharePct?: number;
 }
 
+export type RebalanceSharePatch = Partial<Record<"classSharePct" | "productSharePct", number | null>>;
+
 export interface Targets {
   byAssetClass: Record<string, number>;
   byProductType: Record<string, number>;

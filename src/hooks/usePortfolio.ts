@@ -5,6 +5,7 @@ import {
   subscribeRebalancePreferences,
   saveRebalancePreference,
   saveRebalanceShares,
+  saveRebalanceDistribution,
   subscribeRetirement,
   subscribeRules,
   subscribeTargets,
@@ -16,6 +17,7 @@ import type {
   AssetIntent,
   InstrumentRule,
   RebalancePreference,
+  RebalanceSharePatch,
   RetirementPlan,
   Targets,
   WealthYear,
@@ -159,12 +161,32 @@ export function useRebalancePreferences() {
     });
   }
 
+  async function saveShares(updates: Record<string, RebalanceSharePatch>) {
+    if (!uid) throw new Error("Entre na sua conta para salvar a distribuição.");
+    await saveRebalanceDistribution(uid, updates);
+    setState((current) => {
+      if (current.uid !== uid) return current;
+      const preferences = { ...current.preferences };
+      for (const [key, patch] of Object.entries(updates)) {
+        const next = { ...preferences[key] };
+        for (const field of ["classSharePct", "productSharePct"] as const) {
+          const value = patch[field];
+          if (value === undefined) continue;
+          if (value === null) delete next[field]; else next[field] = value;
+        }
+        preferences[key] = next;
+      }
+      return { ...current, preferences };
+    });
+  }
+
   return {
     preferences: state.uid === uid ? state.preferences : {},
     loading: state.uid !== uid || state.loading,
     error: state.uid === uid ? state.error : null,
     saveIntent,
     saveShare,
+    saveShares,
   };
 }
 

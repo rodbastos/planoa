@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { saveRebalancePreference, saveRebalanceShares, subscribeRebalancePreferences } from "../firestore";
+import { saveRebalanceDistribution, saveRebalancePreference, saveRebalanceShares, subscribeRebalancePreferences } from "../firestore";
 
 const mocks = vi.hoisted(() => ({
   setDoc: vi.fn(),
   onSnapshot: vi.fn(),
   unsubscribe: vi.fn(),
+  batchSet: vi.fn(),
+  batchCommit: vi.fn(),
 }));
 
 vi.mock("../firebase", () => ({ db: "db" }));
@@ -14,11 +16,13 @@ vi.mock("firebase/firestore", () => ({
   setDoc: mocks.setDoc,
   onSnapshot: mocks.onSnapshot,
   deleteField: () => "__DELETE__",
+  writeBatch: () => ({ set: mocks.batchSet, commit: mocks.batchCommit }),
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.setDoc.mockResolvedValue(undefined);
+  mocks.batchCommit.mockResolvedValue(undefined);
   mocks.onSnapshot.mockReturnValue(mocks.unsubscribe);
 });
 
@@ -97,6 +101,38 @@ describe("preferências de rebalanceamento", () => {
       { key: "ativo", classSharePct: "__DELETE__", productSharePct: 60 }, { merge: true });
     await expect(saveRebalanceShares("user-a", "ativo", { classSharePct: 120 })).rejects.toThrow(/0% e 100%/);
     expect(mocks.setDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it("salva toda a distribuição em um único lote sem apagar intenções", async () => {
+    await saveRebalanceDistribution("user-a", {
+      "ativo/a": { classSharePct: 60 },
+      "ativo/b": { classSharePct: 40, productSharePct: 100 },
+    });
+    expect(mocks.batchSet).toHaveBeenCalledTimes(2);
+    expect(mocks.batchSet).toHaveBeenCalledWith("db/users/user-a/rebalancePreferences/ativo%2Fa", { key: "ativo/a", classSharePct: 60 }, { merge: true });
+    expect(mocks.batchSet).toHaveBeenCalledWith("db/users/user-a/rebalancePreferences/ativo%2Fb", { key: "ativo/b", classSharePct: 40, productSharePct: 100 }, { merge: true });
+    expect(mocks.batchCommit).toHaveBeenCalledTimes(1);
+    expect(mocks.setDoc).not.toHaveBeenCalled();
+  });
+
+  it("restaura as sugestões em lote removendo apenas os campos internos", async () => {
+    await saveRebalanceDistribution("user-a", { ativo: { classSharePct: null } });
+    expect(mocks.batchSet).toHaveBeenCalledWith("db/users/user-a/rebalancePreferences/ativo", { key: "ativo", classSharePct: "__DELETE__" }, { merge: true });
+    expect(mocks.batchCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("não confirma salvamento parcial quando o lote falha", async () => {
+    mocks.batchCommit.mockRejectedValueOnce(new Error("Sem conexão"));
+    await expect(saveRebalanceDistribution("user-a", { a: { classSharePct: 50 }, b: { classSharePct: 50 } })).rejects.toThrow("Sem conexão");
+    expect(mocks.batchCommit).toHaveBeenCalledTimes(1);
+    expect(mocks.setDoc).not.toHaveBeenCalled();
+  });
+
+  it("não envia o lote se qualquer percentual for inválido", async () => {
+    await expect(saveRebalanceDistribution("user-a", { a: { classSharePct: 50 }, b: { classSharePct: NaN } })).rejects.toThrow(/0% e 100%/);
+    await expect(saveRebalanceDistribution("", { a: { classSharePct: 100 } })).rejects.toThrow();
+    await expect(saveRebalanceDistribution("user-a", { "": { classSharePct: 100 } })).rejects.toThrow();
+    expect(mocks.batchCommit).not.toHaveBeenCalled();
   });
 
   it("rejeita peso inválido lido do banco em vez de aplicá-lo", () => {

@@ -14,10 +14,10 @@ import { importDate } from "../hooks/useImports";
 import { categoryColor, CHART } from "../lib/colors";
 import { formatBRL, formatDate, formatDateISO, formatPct } from "../lib/format";
 import {
-  assetTargetCategories, createRebalanceAssets, rebalancePreferenceKey, simulateAssetRebalance, summarizeMetrics, summarizeRebalance,
+  assetTargetCategories, createRebalanceAssets, rebalancePreferenceKey, simulateAssetRebalance, summarizeMetrics, summarizeRebalance, validAllocation,
   type RebalanceAsset, type RebalanceDimension, type RebalanceMode, type RebalanceResult, type RebalanceRow,
 } from "../lib/rebalance";
-import { ASSET_CLASSES, PRODUCT_TYPES, type AssetIntent, type Position, type RebalancePreference, type Targets } from "../lib/types";
+import { ASSET_CLASSES, PRODUCT_TYPES, type AssetIntent, type Position, type RebalancePreference, type RebalanceSharePatch, type Targets } from "../lib/types";
 import { cn } from "../lib/utils";
 
 const DIMENSIONS = [
@@ -55,10 +55,9 @@ function AssetLabel({ asset }: { asset: RebalanceAsset }) {
 export function RebalanceamentoPage() {
   const { positions, importMeta, loading, error } = usePortfolio();
   const { targets, loading: loadingTargets } = useTargets();
-  const { preferences, loading: loadingPreferences, error: preferencesError, saveIntent, saveShare } = useRebalancePreferences();
+  const { preferences, loading: loadingPreferences, error: preferencesError, saveIntent, saveShares } = useRebalancePreferences();
   const [searchParams, setSearchParams] = useSearchParams();
-  const dimension: RebalanceDimension = searchParams.get("visao") === "produtos" ? "productType"
-    : searchParams.get("visao") === "classes" ? "assetClass" : "asset";
+  const dimension = searchParams.get("visao") === "produtos" ? "productType" : "assetClass";
   const [revision, setRevision] = useState(0);
 
   if (loading || loadingTargets || loadingPreferences) return <PageLoader />;
@@ -98,9 +97,9 @@ export function RebalanceamentoPage() {
             savedTargets={targets ?? EMPTY_TARGETS}
             preferences={preferences}
             onSaveIntent={saveIntent}
-            onSaveShare={saveShare}
+            onSaveShares={saveShares}
             dimension={dimension}
-            onDimensionChange={(value) => setSearchParams(value === "asset" ? {} : { visao: value === "productType" ? "produtos" : "classes" }, { replace: true })}
+            onDimensionChange={(value) => setSearchParams(value === "productType" ? { visao: "produtos" } : {}, { replace: true })}
           />
         </>
       )}
@@ -108,30 +107,32 @@ export function RebalanceamentoPage() {
   );
 }
 
-function RebalanceScenario({ positions, dimension, savedTargets, preferences, onSaveIntent, onSaveShare, onDimensionChange }: {
+function RebalanceScenario({ positions, dimension, savedTargets, preferences, onSaveIntent, onSaveShares, onDimensionChange }: {
   positions: Position[];
-  dimension: RebalanceDimension;
+  dimension: "assetClass" | "productType";
   savedTargets: Targets;
   preferences: Record<string, RebalancePreference>;
   onSaveIntent: (key: string, intent: AssetIntent) => Promise<void>;
-  onSaveShare: (key: string, patch: { classSharePct?: number | null; productSharePct?: number | null }) => Promise<void>;
-  onDimensionChange: (dimension: RebalanceDimension) => void;
+  onSaveShares: (updates: Record<string, RebalanceSharePatch>) => Promise<void>;
+  onDimensionChange: (dimension: "assetClass" | "productType") => void;
 }) {
-  const [assetDraft, setAssets] = useState(() => createRebalanceAssets(positions, savedTargets.byAssetClass)
-    .map((asset) => {
-      const pref = asset.preferenceKey ? preferences[asset.preferenceKey] : undefined;
-      return pref ? { ...asset,
-        classSharePct: pref.classSharePct ?? asset.classSharePct,
-        productSharePct: pref.productSharePct ?? asset.productSharePct,
-      } : asset;
-    }));
-  const assets = useMemo(() => assetDraft.map((asset): RebalanceAsset => ({ ...asset,
-    intent: asset.preferenceKey ? preferences[asset.preferenceKey]?.intent ?? "keep" : "keep",
-  })), [assetDraft, preferences]);
+  const [assetDraft, setAssets] = useState(() => createRebalanceAssets(positions, savedTargets.byAssetClass));
+  const [shareDraft, setShareDraft] = useState<Record<string, RebalanceSharePatch>>({});
+  const [savingShares, setSavingShares] = useState(false);
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const assets = useMemo(() => assetDraft.map((asset): RebalanceAsset => {
+    const pref = asset.preferenceKey ? preferences[asset.preferenceKey] : undefined;
+    const draft = asset.preferenceKey ? shareDraft[asset.preferenceKey] : undefined;
+    return { ...asset, intent: pref?.intent ?? "keep",
+      classSharePct: draft?.classSharePct !== undefined ? draft.classSharePct ?? asset.classSharePct : pref?.classSharePct ?? asset.classSharePct,
+      productSharePct: draft?.productSharePct !== undefined ? draft.productSharePct ?? asset.productSharePct : pref?.productSharePct ?? asset.productSharePct,
+    };
+  }), [assetDraft, preferences, shareDraft]);
   const [savingIntent, setSavingIntent] = useState<string | null>(null);
   const [failedIntent, setFailedIntent] = useState<{ key: string; intent: AssetIntent; message: string } | null>(null);
-  const [classTargets, setClassTargets] = useState({ ...savedTargets.byAssetClass });
-  const [productTargets, setProductTargets] = useState({ ...savedTargets.byProductType });
+  const classTargets = savedTargets.byAssetClass;
+  const productTargets = savedTargets.byProductType;
   const [mode, setMode] = useState<RebalanceMode>("contribution");
   const [contribution, setContribution] = useState(0);
   const [manualMode, setManualMode] = useState(false);
@@ -144,10 +145,13 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   const productOptions = [...new Set([...PRODUCT_TYPES, ...assets.map((asset) => asset.productType), ...Object.keys(productTargets)])];
   const groupKeys = dimension === "assetClass" ? classOptions : productOptions;
   const shareField = dimension === "productType" ? "productSharePct" : "classSharePct";
-  const hasOverrides = assets.some((asset) => asset.targetOverridePct !== undefined);
-  const targetSum = dimension === "asset"
-    ? assets.reduce((sum, asset) => sum + (asset.intent === "exit" ? 0 : asset.targetOverridePct ?? asset.targetPct), 0)
-    : Object.values(targets).reduce((sum, value) => sum + value, 0);
+  const targetSum = Object.values(targets).reduce((sum, value) => sum + value, 0);
+  const dirtyShares = Object.keys(shareDraft).length > 0;
+  const invalidShares = (["assetClass", "productType"] as const).some((groupField) => {
+    const field = groupField === "assetClass" ? "classSharePct" : "productSharePct";
+    const changedGroups = new Set(assets.filter((asset) => asset.preferenceKey && shareDraft[asset.preferenceKey]?.[field] !== undefined).map((asset) => asset[groupField]));
+    return [...changedGroups].some((key) => !validAllocation(assets.filter((asset) => asset[groupField] === key).map((asset) => asset[field])));
+  });
   const manualTotal = Object.values(manual).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
   const classRank = new Map<string, number>(ASSET_CLASSES.map((key, index) => [key, index]));
   const filteredAssets = assets
@@ -201,42 +205,63 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
   }
 
   function updateAsset(key: string, patch: Partial<RebalanceAsset>) {
-    setAssets((current) => current.map((asset) => asset.key === key ? { ...asset, ...patch } : asset));
+    if (patch[shareField] !== undefined) {
+      const edited = assets.find((asset) => asset.key === key);
+      if (!edited) return;
+      setShareDraft((current) => {
+        const next = { ...current };
+        for (const asset of assets.filter((asset) => asset[dimension] === edited[dimension])) {
+          if (asset.preferenceKey) next[asset.preferenceKey] = { ...next[asset.preferenceKey], [shareField]: asset.key === key ? patch[shareField] : asset[shareField] };
+        }
+        return next;
+      });
+      setShareMessage(null);
+      setShareError(null);
+    } else {
+      setAssets((current) => current.map((asset) => asset.key === key ? { ...asset, ...patch } : asset));
+    }
     setActionError(null);
   }
 
   /** Peso sugerido pela proporção do saldo importado dentro da categoria. */
   function defaultShare(asset: RebalanceAsset, field: "classSharePct" | "productSharePct"): number {
-    const groupField = field === "classSharePct" ? "assetClass" : "productType";
-    const members = assetDraft.filter((item) => !item.future && item[groupField] === asset[groupField]);
-    const total = members.reduce((sum, item) => sum + Math.max(0, item.originalBalance), 0);
-    return total > 0 ? Math.max(0, asset.originalBalance) / total * 100 : 100;
+    return assetDraft.find((item) => item.key === asset.key)?.[field] ?? 0;
   }
 
-  function commitShare(asset: RebalanceAsset, field: "classSharePct" | "productSharePct") {
-    if (!asset.preferenceKey) return;
-    const saved = preferences[asset.preferenceKey]?.[field];
-    const value = asset[field];
-    if (value === saved) return;
-    onSaveShare(asset.preferenceKey, { [field]: value }).catch(() => {
-      setAssets((current) => current.map((item) => item.key === asset.key ? { ...item, [field]: saved ?? defaultShare(asset, field) } : item));
-      toast.error("Não foi possível salvar o peso do ativo. O valor anterior foi restaurado.");
-    });
-  }
-
-  function resetShares() {
-    setAssets((current) => current.map((asset) => asset.future ? asset : { ...asset, [shareField]: defaultShare(asset, shareField) }));
-    for (const asset of assets) {
-      if (asset.preferenceKey && preferences[asset.preferenceKey]?.[shareField] !== undefined) {
-        onSaveShare(asset.preferenceKey, { [shareField]: null })
-          .catch(() => toast.error(`Não foi possível restaurar o peso de ${asset.name}.`));
-      }
+  async function saveDistribution() {
+    if (!dirtyShares || savingShares || invalidShares) return;
+    setSavingShares(true);
+    setShareMessage(null);
+    setShareError(null);
+    try {
+      await onSaveShares(shareDraft);
+      setShareDraft({});
+      setShareMessage("Distribuição salva na sua conta. Será usada nas próximas sugestões.");
+      toast.success("Distribuição salva");
+    } catch (error) {
+      setShareError(`Não foi possível salvar a distribuição. Suas alterações foram mantidas para tentar novamente. ${error instanceof Error ? error.message : ""}`);
+    } finally {
+      setSavingShares(false);
     }
   }
 
+  function resetShares() {
+    setShareDraft((current) => {
+      const next = { ...current };
+      for (const asset of assets) {
+        if (asset.preferenceKey) next[asset.preferenceKey] = { ...next[asset.preferenceKey], [shareField]: null };
+      }
+      return next;
+    });
+    setShareMessage(null);
+    setShareError(null);
+  }
+
   function removeFuture(key: string) {
-    const remaining = assets.filter((asset) => asset.key !== key || !asset.future);
+    const remaining = assetDraft.filter((asset) => asset.key !== key || !asset.future);
+    const removed = assetDraft.find((asset) => asset.key === key && asset.future);
     setAssets(remaining);
+    if (removed?.preferenceKey) setShareDraft((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== removed.preferenceKey)));
     setManual((current) => Object.fromEntries(Object.entries(current).filter(([id]) => remaining.some((asset) => asset.key === id))));
     setActionError(null);
   }
@@ -249,17 +274,6 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
       setActionError(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Não foi possível gerar a sugestão.");
-    }
-  }
-
-  function copyClassTargets() {
-    try {
-      const categories = assetTargetCategories(assets, "assetClass", classTargets);
-      const byKey = new Map(categories.map((row) => [row.key, row.targetPct]));
-      setAssets((current) => current.map((asset) => ({ ...asset, targetPct: byKey.get(asset.key) ?? 0 })));
-      setActionError(null);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Revise as metas por classe.");
     }
   }
 
@@ -313,38 +327,29 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
       </Card>
 
       <Card>
-        <CardHeader title="Metas" subtitle={dimension === "asset"
-          ? "Edite a meta de cada ativo na coluna Meta da tabela. Campo vazio usa a sugestão; um valor digitado vira override e os demais ativos são redimensionados."
-          : "Distribua a meta de cada categoria entre seus ativos pela coluna Peso da tabela. A coluna Meta aceita um override manual por ativo."}
+        <CardHeader title="Metas da Carteira Ideal" subtitle="As metas de classe e produto vêm da Carteira Ideal. Na tabela, edite apenas a participação de cada ativo dentro da sua classe ou produto, não na carteira inteira."
           action={<span className={cn("rounded-full px-3 py-1 text-xs font-semibold", Math.abs(targetSum - 100) <= 0.05 ? "bg-accent/10 text-accent" : "bg-destructive/10 text-destructive")}>
-            Soma: {Number.isFinite(targetSum) ? `${targetSum.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "inválida"}
+            Soma das categorias: {Number.isFinite(targetSum) ? `${targetSum.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "inválida"}
           </span>} />
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="overflow-x-auto"><Tabs tabs={DIMENSIONS} active={dimension} onChange={(value) => { onDimensionChange(value as RebalanceDimension); setActionError(null); }} /></div>
-            <div className="flex items-center gap-2">
-              {hasOverrides && <Button variant="ghost" size="sm" onClick={() => setAssets((current) => current.map((asset) => ({ ...asset, targetOverridePct: undefined })))}>Limpar metas manuais</Button>}
-              {dimension !== "asset" && <Button variant="ghost" size="sm" onClick={resetShares} title="Volta os pesos internos à proporção dos saldos importados">Restaurar pesos</Button>}
-              {dimension === "asset"
-                ? <Button variant="outline" size="sm" onClick={copyClassTargets}>Regerar sugestão a partir das classes</Button>
-                : <Link to="/carteira-ideal" className="text-xs font-medium text-accent hover:underline">Editar metas permanentes</Link>}
-            </div>
+            <div className="overflow-x-auto"><Tabs tabs={DIMENSIONS.filter((tab) => tab.id !== "asset")} active={dimension} onChange={(value) => { onDimensionChange(value as "assetClass" | "productType"); setActionError(null); }} /></div>
+            <Link to="/carteira-ideal" className="text-xs font-medium text-accent hover:underline">Editar metas na Carteira Ideal</Link>
           </div>
-          {dimension !== "asset" && (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {groupKeys.map((key) => {
-                const members = assets.filter((asset) => asset[dimension] === key);
-                const sum = members.reduce((acc, asset) => acc + asset[shareField], 0);
-                return <div key={key} className="rounded-lg border border-border p-3">
-                  <label className="flex items-center justify-between gap-3 text-xs font-medium">
-                    {key}<Input aria-label={`Meta de ${key} (%)`} type="number" inputMode="decimal" min={0} max={100} step="0.01" value={targets[key] ?? 0}
-                      onChange={(event) => (dimension === "assetClass" ? setClassTargets : setProductTargets)((current) => ({ ...current, [key]: event.target.value === "" ? 0 : event.target.valueAsNumber }))} className="h-9 w-24 shrink-0 text-right" />
-                  </label>
-                  <p className="mt-2 text-[11px] text-muted-foreground">{members.length} ativos · Pesos internos: {formatPct(sum / 100)}{!members.length && (targets[key] ?? 0) > 0 ? " · adicione um ativo" : ""}</p>
-                </div>;
-              })}
-            </div>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {groupKeys.filter((key) => assets.some((asset) => asset[dimension] === key) || (targets[key] ?? 0) > 0).map((key) => {
+              const members = assets.filter((asset) => asset[dimension] === key);
+              const sum = members.reduce((acc, asset) => acc + asset[shareField], 0);
+              const valid = validAllocation(members.map((asset) => asset[shareField]));
+              return <div key={key} className="rounded-lg border border-border px-3 py-2 text-xs">
+                <p className="font-medium">{key} · Meta na carteira: {formatPct((targets[key] ?? 0) / 100)}</p>
+                <p className={cn("mt-1", valid ? "text-muted-foreground" : "text-destructive")}>
+                  {members.length} ativos · Distribuição interna: {formatPct(sum / 100)} / 100%
+                  {!members.length ? " · adicione um ativo" : !valid ? " · ajuste para somar 100%" : ""}
+                </p>
+              </div>;
+            })}
+          </div>
         </CardContent>
       </Card>
 
@@ -353,8 +358,16 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
           subtitle={manualMode && mode === "contribution"
             ? `Aporte manual distribuído: ${formatBRL(manualTotal)} de ${formatBRL(contribution)} — o restante fica em caixa.`
             : `${assets.filter((asset) => !asset.future).length} posições · ${assets.filter((asset) => asset.future).length} ativos futuros · Manter ou sair é salvo na conta.`}
-          action={<Button size="sm" variant="outline" aria-expanded={showAddAsset} onClick={() => setShowAddAsset((value) => !value)}><Plus className="h-4 w-4" /> Adicionar ativo</Button>} />
+          action={<div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="ghost" disabled={savingShares} onClick={resetShares}>Restaurar sugestão</Button>
+            <Button size="sm" disabled={!dirtyShares || savingShares || invalidShares} onClick={saveDistribution}>{savingShares ? "Salvando distribuição…" : "Salvar distribuição"}</Button>
+            <Button size="sm" variant="outline" disabled={savingShares} aria-expanded={showAddAsset} onClick={() => setShowAddAsset((value) => !value)}><Plus className="h-4 w-4" /> Adicionar ativo</Button>
+          </div>} />
         <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">Cada classe tem sua própria distribuição de 100%. A sugestão inicial usa os saldos importados; edite os percentuais e clique em Salvar distribuição para usá-los nas próximas visitas.</p>
+          {dirtyShares && <p role="status" className="text-xs text-accent">Alterações não salvas. A simulação usa os valores em edição.{invalidShares && " Ajuste a distribuição de cada classe ou produto alterado para somar 100% antes de salvar."}</p>}
+          {shareMessage && <p role="status" className="text-xs text-accent">{shareMessage}</p>}
+          {shareError && <p role="alert" className="text-sm text-destructive">{shareError}</p>}
           {savingIntent && <p role="status" className="text-xs text-muted-foreground">Salvando intenção na sua conta. As sugestões ficam suspensas até a confirmação.</p>}
           {failedIntent && <div role="alert" className="rounded-lg border border-destructive/25 p-3 text-sm text-destructive">
             Não foi possível salvar a intenção. As sugestões estão suspensas: {failedIntent.message}
@@ -370,8 +383,7 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
                 <th scope="col" className="py-3 pr-4 font-medium">Ativo</th>
                 <th scope="col" className="px-3 py-3 font-medium">Intenção</th>
                 <th scope="col" className="px-3 py-3 text-right font-medium">Saldo (R$)</th>
-                {dimension !== "asset" && <th scope="col" className="px-3 py-3 text-right font-medium">Peso na {dimension === "assetClass" ? "classe" : "categoria"} (%)</th>}
-                <th scope="col" className="px-3 py-3 text-right font-medium">Meta (%)<span className="block text-[10px] font-normal">vazio = sugestão</span></th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">Meta dentro {dimension === "assetClass" ? "da classe" : "do produto"} (%)<span className="block text-[10px] font-normal">100% em cada {dimension === "assetClass" ? "classe" : "produto"}</span></th>
                 <th scope="col" className="px-3 py-3 text-right font-medium">{manualMode && mode === "contribution" ? "Aporte (R$)" : "Plano"}</th>
                 <th scope="col" className="px-3 py-3 text-right font-medium">Depois</th>
                 <th scope="col"><span className="sr-only">Remover ativo futuro</span></th>
@@ -387,13 +399,13 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
                   mode={mode}
                   manualMode={manualMode}
                   manualValue={manual[asset.key]}
-                  suggestedPct={suggestedTargets.get(asset.key)}
-                  saving={savingIntent !== null}
+                  suggestedPct={(targets[asset[dimension]] ?? 0) > 0 ? (suggestedTargets.get(asset.key) ?? 0) / targets[asset[dimension]] * 100 : defaultShare(asset, shareField)}
+                  saving={savingIntent !== null || savingShares}
+                  shareDirty={!!(asset.preferenceKey && shareDraft[asset.preferenceKey]?.[shareField] !== undefined)}
                   shareSaved={!!(asset.preferenceKey && preferences[asset.preferenceKey]?.[shareField] !== undefined)}
                   totalAfter={result?.totalAfter ?? 0}
                   onIntent={changeIntent}
                   onUpdate={updateAsset}
-                  onShareBlur={commitShare}
                   onManual={(value) => setManual((current) => ({ ...current, [asset.key]: value }))}
                   onRemove={removeFuture}
                 />;
@@ -409,12 +421,12 @@ function RebalanceScenario({ positions, dimension, savedTargets, preferences, on
       {result && !savingIntent && !failedIntent && <RebalanceResults result={result} assets={assets} mode={mode} contribution={contribution}
         groupTargets={{ assetClass: classTargets, productType: productTargets }}
         onUseMinimum={(value) => { setContribution(value); setManualMode(false); }} />}
-      <div className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground"><CircleHelp className="mt-0.5 h-4 w-4 shrink-0" /><p>Simulação em valores brutos, sem executar ordens ou salvar ativos futuros. Não considera impostos, taxas, liquidez, carências, preços em tempo real ou lotes mínimos. Revise essas condições antes de investir. Trocar a importação, sair da página ou reiniciar descarta o cenário, mas preserva as intenções salvas na conta.</p></div>
+      <div className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground"><CircleHelp className="mt-0.5 h-4 w-4 shrink-0" /><p>Simulação em valores brutos, sem executar ordens ou salvar ativos futuros. Não considera impostos, taxas, liquidez, carências, preços em tempo real ou lotes mínimos. Revise essas condições antes de investir. Trocar a importação, sair da página ou reiniciar descarta o cenário, mas preserva as intenções e distribuições salvas na conta.</p></div>
     </>
   );
 }
 
-function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manualValue, suggestedPct, saving, totalAfter, shareSaved, onIntent, onUpdate, onShareBlur, onManual, onRemove }: {
+function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manualValue, suggestedPct, saving, totalAfter, shareSaved, shareDirty, onIntent, onUpdate, onManual, onRemove }: {
   asset: RebalanceAsset;
   row?: RebalanceRow;
   dimension: RebalanceDimension;
@@ -427,12 +439,11 @@ function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manu
   totalAfter: number;
   onIntent: (key: string, intent: AssetIntent) => void;
   onUpdate: (key: string, patch: Partial<RebalanceAsset>) => void;
-  onShareBlur: (asset: RebalanceAsset, field: "classSharePct" | "productSharePct") => void;
   onManual: (value: number) => void;
   onRemove: (key: string) => void;
   shareSaved: boolean;
+  shareDirty: boolean;
 }) {
-  const overridden = asset.targetOverridePct !== undefined;
   return (
     <tr className="border-b border-border/50 last:border-0">
       <th scope="row" className="py-3 pr-4 text-left font-medium"><AssetLabel asset={asset} /></th>
@@ -453,20 +464,16 @@ function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manu
         {!asset.future && row && <span className="mt-1 block text-right text-[11px] text-muted-foreground">{formatPct(row.currentPct)}</span>}
         {asset.balance !== asset.originalBalance && !asset.future && <span className="mt-0.5 block text-right text-[11px] text-muted-foreground">importado: {formatBRL(asset.originalBalance)}</span>}
       </td>
-      {dimension !== "asset" && <td className="px-3 py-3 align-top">
-        <Input aria-label={`Peso interno de ${asset.name} (%)`} type="number" inputMode="decimal" min={0} max={100} step="0.01" value={asset[shareField]}
-          onChange={(event) => onUpdate(asset.key, { [shareField]: event.target.value === "" ? 0 : event.target.valueAsNumber })}
-          onBlur={() => onShareBlur(asset, shareField)}
-          title={shareSaved ? "Peso manual salvo na conta." : "Peso sugerido pela proporção do saldo. Edite para fixar um valor manual salvo na conta."}
-          className={cn("ml-auto h-9 w-24 text-right", shareSaved && "border-accent")} />
-      </td>}
       <td className="px-3 py-3 align-top">
-        <Input aria-label={`Meta manual de ${asset.name} (%)`} aria-invalid={overridden && (asset.targetOverridePct! < 0 || asset.targetOverridePct! > 100)}
-          type="number" inputMode="decimal" min={0} max={100} step="0.01" disabled={asset.intent === "exit"}
-          value={asset.targetOverridePct ?? ""} placeholder={pctPlaceholder(suggestedPct !== undefined ? suggestedPct / 100 : undefined)}
-          onChange={(event) => onUpdate(asset.key, { targetOverridePct: event.target.value === "" ? undefined : event.target.valueAsNumber })}
-          className={cn("ml-auto h-9 w-24 text-right disabled:bg-muted", overridden && "border-accent")}
-          title={overridden ? "Meta manual (override). Esvazie para voltar à sugestão." : "Meta sugerida. Digite para definir um valor manual."} />
+        <Input aria-label={`Meta de ${asset.name} dentro ${dimension === "productType" ? "do produto" : "da classe"} (%)`}
+          aria-invalid={!Number.isFinite(asset[shareField]) || asset[shareField] < 0 || asset[shareField] > 100}
+          type="number" inputMode="decimal" min={0} max={100} step="0.01" disabled={saving}
+          value={Number.isFinite(asset[shareField]) ? asset[shareField] : ""} placeholder={pctPlaceholder(suggestedPct !== undefined ? suggestedPct / 100 : undefined)}
+          onChange={(event) => onUpdate(asset.key, { [shareField]: event.target.value === "" ? 0 : event.target.valueAsNumber })}
+          title="Percentual dentro desta classe ou produto, não da carteira. Edite e clique em Salvar distribuição."
+          className={cn("ml-auto h-9 w-24 text-right", (shareSaved || shareDirty) && "border-accent")} />
+        <span className="mt-1 block text-right text-[11px] text-muted-foreground">{shareDirty ? "Não salvo" : shareSaved ? "Salvo na conta" : "Sugerido pelo saldo"}</span>
+        {asset.intent === "exit" && <span className="mt-1 block text-right text-[11px] text-muted-foreground">Meta efetiva: 0% · fatia redistribuída</span>}
       </td>
       <td className="px-3 py-3 text-right align-top">
         {manualMode && mode === "contribution"
@@ -483,7 +490,7 @@ function ScenarioRow({ asset, row, dimension, shareField, mode, manualMode, manu
           </span>
         </> : "—"}
       </td>
-      <td className="align-top">{asset.future && <Button variant="ghost" size="sm" title={`Remover ${asset.name} da simulação`} aria-label={`Remover ${asset.name} da simulação`} onClick={() => onRemove(asset.key)}><Trash2 className="h-4 w-4" /></Button>}</td>
+      <td className="align-top">{asset.future && <Button variant="ghost" size="sm" title={`Remover ${asset.name} da simulação`} aria-label={`Remover ${asset.name} da simulação`} disabled={saving} onClick={() => onRemove(asset.key)}><Trash2 className="h-4 w-4" /></Button>}</td>
     </tr>
   );
 }

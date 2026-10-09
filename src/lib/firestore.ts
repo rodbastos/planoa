@@ -18,6 +18,7 @@ import type {
   InstrumentRule,
   Position,
   RebalancePreference,
+  RebalanceSharePatch,
   RetirementPlan,
   Targets,
   WealthYear,
@@ -91,6 +92,27 @@ export async function saveRebalanceShares(
   }
   if (Object.keys(data).length === 1) return;
   await setDoc(doc(collection(userRef(uid), "rebalancePreferences"), encodeURIComponent(key)), data, { merge: true });
+}
+
+export async function saveRebalanceDistribution(uid: string, updates: Record<string, RebalanceSharePatch>): Promise<void> {
+  const entries = Object.entries(updates);
+  if (!uid || entries.length > BATCH_LIMIT) throw new Error("Não foi possível salvar a distribuição: usuário inválido ou muitos ativos.");
+  if (!entries.length) return;
+  const batch = writeBatch(db);
+  for (const [key, shares] of entries) {
+    if (!key) throw new Error("Preferência de rebalanceamento inválida.");
+    const data: Record<string, unknown> = { key };
+    for (const field of ["classSharePct", "productSharePct"] as const) {
+      const value = shares[field];
+      if (value === undefined) continue;
+      if (value !== null && !validShare(value)) throw new Error("A meta interna deve estar entre 0% e 100%.");
+      data[field] = value === null ? deleteField() : value;
+    }
+    if (Object.keys(data).length > 1) {
+      batch.set(doc(collection(userRef(uid), "rebalancePreferences"), encodeURIComponent(key)), data, { merge: true });
+    }
+  }
+  await batch.commit();
 }
 
 export function targetsRef(uid: string) {
