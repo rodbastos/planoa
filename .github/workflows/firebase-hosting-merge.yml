@@ -25,3 +25,4 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PLANO_ALLOCA }}
           projectId: plano-alloca
           channelId: live
+          firebaseToolsVersion: 15.32.1
