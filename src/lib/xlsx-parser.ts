@@ -57,7 +57,7 @@ const HEADER_TOKENS = new Set([
   "iof",
 ]);
 
-const CLASS_RE = /^(\d+[.,]\d+)\s*%\s*\|\s*(.+)$/;
+const CLASS_RE = /^(\d+(?:[.,]\d+)?)\s*%\s*\|\s*(.+)$/;
 
 type Rows = unknown[][];
 

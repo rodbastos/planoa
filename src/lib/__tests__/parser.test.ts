@@ -40,6 +40,22 @@ describe("parser da Posição Detalhada (XP)", () => {
     expect(p.referenceDate).toBe(new Date(2017, 0, 31, 12).getTime());
   });
 
+  it("reconhece linhas de classe com percentual inteiro (ex.: '21% | Inflação')", () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Conta: 1 | 03/10/2026, 05:21"],
+      ["Tesouro Direto", null, null, null, null, null, "R$ 1.000,00"],
+      ["21% | Inflação", "Saldo", "% Alocação", "Valor aplicado"],
+      ["NTNB PRINC mai/2029", "R$ 1.000,00", "10%", "R$ 900,00"],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const out = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    const p = parseSpreadsheet(new Uint8Array(out));
+    expect(p.warnings).toEqual([]);
+    expect(p.positions[0].assetClass).toBe("IPCA Longo");
+    expect(p.positions[0].productType).toBe("Tesouro Direto");
+  });
+
   it("extrai todas as posições", () => {
     // 6 B3 + 6 Tesouro + 15 Renda Fixa + 5 COE + 4 Fundos
     expect(parsed.positions).toHaveLength(36);
